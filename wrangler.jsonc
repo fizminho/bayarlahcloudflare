@@ -13,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "bayarlah",
-      "database_id": "REPLACE_WITH_ID_FROM_wrangler_d1_create",
+      "database_id": "2f2f5198-262e-48a1-a7ce-1727d1e64b52",
       "migrations_dir": "migrations"
     }
   ]
