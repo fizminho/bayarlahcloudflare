@@ -59,8 +59,8 @@ export default function Home() {
       setItems(Array.isArray(parsed) && parsed.length ? parsed : [{ item_name: '', quantity: 1, price: 0 }])
       if (parsedTax > 0) setTax(parsedTax)
       setStep('review')
-    } catch {
-      alert('OCR failed. Please try again or add items manually.')
+    } catch (err) {
+      alert(`OCR failed: ${err instanceof Error ? err.message : 'unknown error'}\n\nYou can add items manually.`)
       setItems([{ item_name: '', quantity: 1, price: 0 }])
       setStep('review')
     } finally {
