@@ -18,7 +18,10 @@ export async function extractTextFromImage(file: File): Promise<string> {
     body: JSON.stringify({ base64, mimeType: file.type }),
   })
 
-  if (!res.ok) throw new Error('All Gemini models are unavailable. Please try again in a moment.')
+  if (!res.ok) {
+    const { error } = await res.json().catch(() => ({ error: '' }))
+    throw new Error(error || 'OCR failed. Please try again in a moment.')
+  }
   const { text } = await res.json()
   return text
 }
