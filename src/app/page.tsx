@@ -80,6 +80,9 @@ export default function Home() {
     setItems(prev => prev.filter((_, i) => i !== index))
   }
 
+  const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+  const total = subtotal + tax
+
   async function handleSave() {
     setSaving(true)
     try {
