@@ -32,3 +32,4 @@ CREATE TABLE selections (
   UNIQUE (participant_id, receipt_item_id)
 );
 CREATE INDEX idx_selections_item ON selections(receipt_item_id);
+ALTER TABLE receipts ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
