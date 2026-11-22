@@ -1,0 +1,441 @@
+diff -ruN -x node_modules a/.github/workflows/build.yml b/.github/workflows/build.yml
+--- a/.github/workflows/build.yml	2026-11-22 04:18:14.866720566 +0000
++++ b/.github/workflows/build.yml	2026-11-22 04:18:32.984445631 +0000
+@@ -23,6 +23,8 @@
+         run: node --test worker/gemini-batch.test.mjs worker/mfi-ranking.test.mjs
+       - name: Run debt reconciliation regression tests
+         run: node --test worker/debt-reconciliation.test.mjs
++      - name: Run legacy SEC debt shadow candidate tests
++        run: node --test worker/legacy-debt-shadow.test.mjs
+       - name: Run legacy SEC debt diagnostic tests
+         run: node --test worker/legacy-debt-diagnostic.test.mjs
+       - name: Run lease and ROU coverage regression tests
+diff -ruN -x node_modules a/docs/US_MFI_LEGACY_DEBT_DIAGNOSTICS.md b/docs/US_MFI_LEGACY_DEBT_DIAGNOSTICS.md
+--- a/docs/US_MFI_LEGACY_DEBT_DIAGNOSTICS.md	2026-11-22 04:18:14.867077579 +0000
++++ b/docs/US_MFI_LEGACY_DEBT_DIAGNOSTICS.md	2026-11-22 04:23:50.832498754 +0000
+@@ -53,3 +53,6 @@
+ ```
+ 
+ Do not paste the bearer token into chat or commit it. Run the endpoint after the Worker deployment completes. Results are limited to public SEC filing facts and the user's own stored reconciliation metadata.
++
++
++See `US_MFI_LEGACY_DEBT_SHADOW_CANDIDATE.md` for the separate shadow candidate endpoint (not deployed yet).
+diff -ruN -x node_modules a/docs/US_MFI_LEGACY_DEBT_SHADOW_CANDIDATE.md b/docs/US_MFI_LEGACY_DEBT_SHADOW_CANDIDATE.md
+--- a/docs/US_MFI_LEGACY_DEBT_SHADOW_CANDIDATE.md	1970-01-01 00:00:00.000000000 +0000
++++ b/docs/US_MFI_LEGACY_DEBT_SHADOW_CANDIDATE.md	2026-11-22 04:23:50.819501893 +0000
+@@ -0,0 +1,34 @@
++# US MFI Legacy Debt Shadow Candidate
++
++**Status:** implemented locally, not deployed or live-verified. Shadow only.
++
++## Endpoint
++`POST /api/fundamentals/legacy-debt-shadow-preview` (Bearer `UNIVERSE_SYNC_TOKEN`, 1-10 active US tickers).
++Read-only: D1 SELECTs and SEC Company Facts fetches only. Always returns `production_write:false`, `rankings_changed:false`.
++The existing `/legacy-debt-diagnostic` endpoint and the legacy resolver are unchanged.
++
++## Rule
++For one accession, fiscal period, USD, consolidated (non-dimensional) instant facts:
++
++`candidate_conventional_debt = LongTermDebtCurrent + LongTermDebtNoncurrent`
++
++- Both components required. Absent is unknown, never zero; a reported 0 is preserved.
++- Competing different values for one component => `unresolved_ambiguous`.
++- `ShortTermBorrowings`/`ShortTermDebtCurrent` are added only when `DebtCurrent` or `BorrowingsCurrent` equals current + short (proves non-overlap), or the short fact is a reported 0. Otherwise `short_term_borrowings_overlap_unproven`.
++- A current aggregate equal to the current component is not double counted; a conflicting aggregate leaves the issuer unresolved.
++- Debt-and-lease aggregate tags are surfaced, never used as conventional debt.
++- Royalty/other financing and lease concepts are discovered by broad tag-name scan, listed with `included_in_candidate:false`, and flag `scope_review_required_*` / `separate_lease_evidence_not_included`.
++- No recognised debt evidence at all => `insufficient_evidence` (not proof of no debt).
++- Short-term borrowing status is `not_separately_identified_unknown` when absent.
++- `LongTermDebt` is a cross-check only; a mismatch is flagged, not blocking.
++
++Statuses: `candidate`, `candidate_scope_review_required`, `unresolved_insufficient_inputs`, `unresolved_ambiguous`, `insufficient_evidence`.
++
++## Files
++`worker/legacy-debt-shadow.mjs`, `worker/legacy-debt-shadow.test.mjs` (18 tests), `worker/index.ts` (route), `.github/workflows/build.yml` (test step).
++
++## Verification (local, 22 Nov 2026)
++- `node --test worker/*.test.mjs`: 111 pass, 0 fail.
++- `npm run build` and `wrangler deploy --dry-run`: NOT run locally (no network/node_modules in this environment); CI must confirm.
++- Not deployed; live endpoint not called. Live BMBL/OTEX/UPWK/BCRX/IRWD results are unverified. Fixtures use the handover's filing values only as test data.
++- Production fundamentals, ratios, eligibility and rankings: untouched by design (no write path; test asserts none in the route).
+diff -ruN -x node_modules a/worker/index.ts b/worker/index.ts
+--- a/worker/index.ts	2026-11-22 04:18:14.867758141 +0000
++++ b/worker/index.ts	2026-11-22 04:18:29.107845292 +0000
+@@ -10,6 +10,7 @@
+ import { classifyDebtReconciliation } from "./debt-reconciliation.mjs";
+ // @ts-ignore JavaScript module is contract-tested directly with Node.js.
+ import { diagnoseLegacyDebtFacts } from "./legacy-debt-diagnostic.mjs";
++import { resolveLegacyDebtShadow } from "./legacy-debt-shadow.mjs";
+ // @ts-ignore JavaScript module is contract-tested directly with Node.js.
+ import { parsePageParams, recordReviewDecision, listReviewHistory, listReviewDecisions, MAX_DECISION_BODY_BYTES, REVIEW_TASKS } from "./gemini-review-ledger.mjs";
+ // @ts-ignore JavaScript module is contract-tested directly with Node.js.
+@@ -1111,6 +1112,55 @@
+         return json(response);
+       } catch(e) { return json({error:e instanceof Error?e.message:String(e),source:"MFI shadow ranking preview"},503); }
+     }
++    if (url.pathname==="/api/fundamentals/legacy-debt-shadow-preview" && request.method==="POST") {
++      // SHADOW ONLY: read-only SELECTs plus SEC fetches. No production writes, no ranking changes.
++      if (!env.UNIVERSE_SYNC_TOKEN) return json({error:"UNIVERSE_SYNC_TOKEN is not configured"},503);
++      if (request.headers.get("Authorization") !== "Bearer " + env.UNIVERSE_SYNC_TOKEN) return json({error:"Unauthorized"},401);
++      try {
++        await ensureSchema(env);
++        const payload:any=await request.json();
++        const requested=Array.isArray(payload.symbols)?payload.symbols:[payload.symbol];
++        const selected=[...new Set(requested.map((value:any)=>String(value??"").trim().toUpperCase()).filter((value:string)=>/^[A-Z0-9.-]{1,15}$/.test(value)))];
++        if (!selected.length || selected.length>10) return json({error:"Provide between 1 and 10 valid US ticker symbols"},400);
++        const results=[];
++        for(const symbol of selected) {
++          const row=await env.DB.prepare(`SELECT m.symbol,m.company_name,cm.cik,f.fiscal_period AS legacy_fiscal_period,
++            f.filed_at AS legacy_filed_at,f.total_debt AS legacy_total_debt
++            FROM stock_master m LEFT JOIN sec_company_map cm ON cm.symbol=m.symbol
++            LEFT JOIN stock_fundamentals f ON f.symbol=m.symbol AND f.market='US'
++            WHERE m.market='US' AND m.symbol=? AND m.listing_status='active'
++            AND EXISTS (SELECT 1 FROM stock_universe_membership um WHERE um.market='US' AND um.symbol=m.symbol AND um.active=1)`).bind(symbol).first<any>();
++          if(!row) { results.push({symbol,state:"not_in_active_us_universe"}); continue; }
++          const base={symbol,company_name:row.company_name,cik:row.cik??null,
++            legacy_total_debt:row.legacy_total_debt==null?null:Number(row.legacy_total_debt)};
++          if(!row.cik || row.cik==="UNMAPPED") { results.push({...base,state:"sec_cik_unmapped"}); continue; }
++          try {
++            const response=await fetch("https://data.sec.gov/api/xbrl/companyfacts/CIK"+String(row.cik).padStart(10,"0")+".json",
++              {headers:{"User-Agent":"Magic Screen/1.0 support@binalah.co","Accept":"application/json"}});
++            if(!response.ok) { results.push({...base,state:"sec_companyfacts_error",http_status:response.status}); continue; }
++            const facts:any=await response.json();
++            const anchorTags=["OperatingIncomeLoss","OperatingProfitLoss","ProfitLossFromOperatingActivities","Revenues","Revenue",
++              "RevenueFromContractWithCustomerExcludingAssessedTax","RevenueFromContractWithCustomerIncludingAssessedTax",
++              "SalesRevenueNet","SalesRevenueGoodsNet","SalesRevenueServicesNet"];
++            const annual=["us-gaap","ifrs-full"].flatMap(t=>anchorTags.flatMap(tag=>facts?.facts?.[t]?.[tag]?.units?.USD??[]))
++              .filter((x:any)=>x.val!=null&&x.start&&x.end&&["10-K","20-F","40-F"].includes(x.form)
++                &&(Date.parse(x.end)-Date.parse(x.start))/86400000>=330&&(Date.parse(x.end)-Date.parse(x.start))/86400000<=400)
++              .sort((a:any,b:any)=>b.end.localeCompare(a.end)||b.filed.localeCompare(a.filed));
++            const anchor=annual.find((x:any)=>
++              (!row.legacy_fiscal_period||x.end===row.legacy_fiscal_period)&&(!row.legacy_filed_at||x.filed===row.legacy_filed_at)
++            )??annual.find((x:any)=>!row.legacy_fiscal_period||x.end===row.legacy_fiscal_period)??annual[0];
++            if(!anchor?.accn) { results.push({...base,state:"no_annual_usd_anchor_found"}); continue; }
++            results.push({...base,state:"shadow_evaluated",sec_company_name:facts?.entityName??null,
++              anchor:{accession:anchor.accn,form:anchor.form,fiscal_period:anchor.end,filed:anchor.filed},
++              shadow:resolveLegacyDebtShadow(facts,anchor.end,anchor.accn)});
++          } catch(error) {
++            results.push({...base,state:"sec_fetch_error",error:error instanceof Error?error.message:String(error)});
++          }
++        }
++        return json({source:"SEC EDGAR Company Facts",mode:"shadow_read_only",label:"shadow candidate, not production",results,
++          production_fundamentals_changed:false,rankings_changed:false,production_write:false});
++      } catch(error) { return json({error:error instanceof Error?error.message:String(error),source:"Legacy SEC debt shadow preview"},503); }
++    }
+     if (url.pathname==="/api/fundamentals/legacy-debt-diagnostic" && request.method==="POST") {
+       if (!env.UNIVERSE_SYNC_TOKEN) return json({error:"UNIVERSE_SYNC_TOKEN is not configured"},503);
+       if (request.headers.get("Authorization") !== "Bearer " + env.UNIVERSE_SYNC_TOKEN) return json({error:"Unauthorized"},401);
+diff -ruN -x node_modules a/worker/legacy-debt-shadow.mjs b/worker/legacy-debt-shadow.mjs
+--- a/worker/legacy-debt-shadow.mjs	1970-01-01 00:00:00.000000000 +0000
++++ b/worker/legacy-debt-shadow.mjs	2026-11-22 04:18:14.868791843 +0000
+@@ -0,0 +1,159 @@
++// Read-only SHADOW candidate: conventional debt = LongTermDebtCurrent + LongTermDebtNoncurrent.
++// Pure function. Never writes production data. Missing is unknown, never zero.
++const TAXONOMIES = ["us-gaap", "ifrs-full"];
++const FORMS = ["10-K", "20-F", "40-F", "10-Q"];
++const CURRENT_TAGS = ["LongTermDebtCurrent"];
++const NONCURRENT_TAGS = ["LongTermDebtNoncurrent"];
++const SHORT_TERM_TAGS = ["ShortTermBorrowings", "ShortTermDebtCurrent"];
++const CURRENT_AGGREGATE_TAGS = ["DebtCurrent", "BorrowingsCurrent"];
++const LEASE_AGGREGATE_TAGS = [
++  "LongTermDebtAndFinanceLeaseObligationsNoncurrent", "LongTermDebtAndCapitalLeaseObligationsNoncurrent",
++  "LongTermDebtAndFinanceLeaseObligationsCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent"
++];
++const CROSS_CHECK_TAGS = ["LongTermDebt"];
++const SELECTED = new Set([...CURRENT_TAGS, ...NONCURRENT_TAGS, ...SHORT_TERM_TAGS,
++  ...CURRENT_AGGREGATE_TAGS, ...LEASE_AGGREGATE_TAGS, ...CROSS_CHECK_TAGS]);
++const DISCOVERY = /Debt|Borrowing|Loan|Lease|Royalty|Financing|NotesPayable|Convertible|CreditFacility|Securiti[sz]|SaleLeaseback|Obligation/i;
++const MAX_DISCOVERED = 60;
++
++function hasDimension(entry) {
++  return Boolean(entry?.segment || entry?.dimensions || entry?.members || entry?.dimension || entry?.axis);
++}
++
++function reject(entry, taxonomy, tag, unit, reason) {
++  return { taxonomy, tag, unit, value: typeof entry?.val === "number" ? entry.val : null,
++    end: entry?.end ?? null, start: entry?.start ?? null, filed: entry?.filed ?? null, reason };
++}
++
++// Collect facts of one accession for the given tags; split into eligible and rejected.
++function collect(facts, tags, accession, periodEnd) {
++  const eligible = [], rejected = [];
++  for (const taxonomy of TAXONOMIES) for (const tag of tags) {
++    const units = facts?.facts?.[taxonomy]?.[tag]?.units ?? {};
++    for (const [unit, entries] of Object.entries(units)) for (const entry of Array.isArray(entries) ? entries : []) {
++      if (entry?.accn !== accession) continue;
++      let reason = null;
++      if (hasDimension(entry)) reason = "dimensional_fact";
++      else if (unit !== "USD") reason = "non_usd_unit";
++      else if (entry?.start || entry?.end !== periodEnd) reason = "period_mismatch";
++      else if (typeof entry?.val !== "number" || !Number.isFinite(entry.val)) reason = "non_numeric_value";
++      else if (!entry?.filed) reason = "missing_filed_date";
++      else if (!FORMS.includes(entry?.form)) reason = "unsupported_form";
++      if (reason) rejected.push(reject(entry, taxonomy, tag, unit, reason));
++      else eligible.push({ taxonomy, tag, unit, currency: "USD", value: entry.val, end: entry.end,
++        filed: entry.filed, form: entry.form, accession });
++    }
++  }
++  return { eligible, rejected };
++}
++
++// One component: unique value across eligible facts, else absent or ambiguous.
++function component(facts, tags, accession, periodEnd) {
++  const { eligible, rejected } = collect(facts, tags, accession, periodEnd);
++  const values = [...new Set(eligible.map(f => f.value))];
++  if (!eligible.length) return { status: "absent", fact: null, rejected };
++  if (values.length > 1) return { status: "ambiguous", fact: null, competing_values: values, rejected };
++  const best = [...eligible].sort((a, b) => String(b.filed).localeCompare(String(a.filed)))[0];
++  return { status: "present", fact: best, rejected };
++}
++
++function describe(c) {
++  return c.fact ? { concept: `${c.fact.taxonomy}:${c.fact.tag}`, value: c.fact.value, unit: c.fact.unit,
++    currency: c.fact.currency, accession: c.fact.accession, fiscal_period: c.fact.end,
++    filed: c.fact.filed, form: c.fact.form, reported: true } : null;
++}
++
++function categorize(tag) {
++  if (/Royalty|SaleLeaseback|Securiti[sz]|CustomerFinancing|FinancingObligation|FailedSale/i.test(tag)) return "royalty_or_other_financing";
++  if (/Lease/i.test(tag)) return "lease";
++  return "other_debt_related";
++}
++
++function discover(facts, accession, periodEnd) {
++  const out = [];
++  for (const taxonomy of TAXONOMIES) for (const [tag, node] of Object.entries(facts?.facts?.[taxonomy] ?? {})) {
++    if (SELECTED.has(tag) || !DISCOVERY.test(tag)) continue;
++    for (const [unit, entries] of Object.entries(node?.units ?? {})) for (const entry of Array.isArray(entries) ? entries : []) {
++      if (entry?.accn !== accession || entry?.start || entry?.end !== periodEnd || hasDimension(entry)) continue;
++      if (typeof entry?.val !== "number" || !Number.isFinite(entry.val)) continue;
++      out.push({ concept: `${taxonomy}:${tag}`, value: entry.val, unit, filed: entry.filed ?? null,
++        category: categorize(tag), included_in_candidate: false });
++    }
++  }
++  const seen = new Set();
++  return out.filter(x => { const k = `${x.concept}|${x.unit}|${x.value}`; if (seen.has(k)) return false; seen.add(k); return true; })
++    .slice(0, MAX_DISCOVERED);
++}
++
++export function resolveLegacyDebtShadow(facts, periodEnd, accession) {
++  const cur = component(facts, CURRENT_TAGS, accession, periodEnd);
++  const non = component(facts, NONCURRENT_TAGS, accession, periodEnd);
++  const short = component(facts, SHORT_TERM_TAGS, accession, periodEnd);
++  const aggs = CURRENT_AGGREGATE_TAGS.map(tag => component(facts, [tag], accession, periodEnd));
++  const leaseAgg = component(facts, LEASE_AGGREGATE_TAGS, accession, periodEnd);
++  const longTermDebt = component(facts, CROSS_CHECK_TAGS, accession, periodEnd);
++  const discovered = discover(facts, accession, periodEnd);
++  const reasons = [], flags = [];
++  const note = (list, v) => { if (!list.includes(v)) list.push(v); };
++
++  for (const [label, c] of [["current_long_term_debt", cur], ["noncurrent_long_term_debt", non]]) {
++    if (c.status === "absent") note(reasons, `missing_${label}`);
++    if (c.status === "ambiguous") note(reasons, `ambiguous_${label}`);
++  }
++  if (short.status === "ambiguous") note(reasons, "ambiguous_short_term_borrowings");
++
++  let methodComponents = "current_plus_noncurrent_long_term_debt";
++  let shortIncluded = false;
++  if (cur.status === "present" && short.status === "present") {
++    // Short-term borrowings are added only when an aggregate proves non-overlap.
++    const proof = aggs.find(a => a.status === "present" && a.fact.value === cur.fact.value + short.fact.value);
++    if (short.fact.value === 0) { shortIncluded = true; }
++    else if (proof) { shortIncluded = true; methodComponents = "current_plus_short_term_plus_noncurrent_long_term_debt"; }
++    else note(reasons, "short_term_borrowings_overlap_unproven");
++  }
++  if (cur.status === "present") for (const a of aggs) {
++    if (a.status === "ambiguous") note(reasons, "ambiguous_current_aggregate");
++    if (a.status !== "present") continue;
++    const expected = cur.fact.value + (shortIncluded && short.status === "present" ? short.fact.value : 0);
++    if (a.fact.value !== expected && a.fact.value !== cur.fact.value) note(reasons, "current_aggregate_conflicts_with_components");
++  }
++  if (leaseAgg.status === "present") note(flags, "debt_and_lease_aggregate_present_not_used");
++  const royalty = discovered.filter(d => d.category === "royalty_or_other_financing");
++  const leases = discovered.filter(d => d.category === "lease");
++  if (royalty.length) note(flags, "scope_review_required_royalty_or_other_financing");
++  if (leases.length) note(flags, "separate_lease_evidence_not_included");
++
++  const anyDebtEvidence = discovered.length > 0 || [cur, non, short, longTermDebt, leaseAgg, ...aggs].some(c => c.status !== "absent");
++  let status, total = null, method = null;
++  if (reasons.length) {
++    status = reasons.some(r => r.startsWith("ambiguous") || r.includes("conflict") || r.includes("overlap"))
++      ? "unresolved_ambiguous" : "unresolved_insufficient_inputs";
++  } else {
++    total = cur.fact.value + non.fact.value + (shortIncluded && short.status === "present" ? short.fact.value : 0);
++    method = methodComponents;
++    status = flags.some(f => f.startsWith("scope_review_required")) ? "candidate_scope_review_required" : "candidate";
++  }
++  if (status === "unresolved_insufficient_inputs" && !anyDebtEvidence) {
++    note(reasons, "no_recognised_debt_evidence_not_proof_of_no_debt");
++    status = "insufficient_evidence";
++  }
++  if (longTermDebt.status === "present" && total !== null && longTermDebt.fact.value !== total)
++    note(flags, "long_term_debt_total_differs_from_candidate");
++
++  return {
++    anchor: { accession, fiscal_period: periodEnd },
++    status, candidate_conventional_debt: total, calculation_method: method, currency: total === null ? null : "USD",
++    components: { current_long_term_debt: describe(cur), noncurrent_long_term_debt: describe(non),
++      short_term_borrowings: shortIncluded ? describe(short) : null },
++    short_term_borrowing: {
++      separately_identified: short.status === "present",
++      status: short.status === "present" ? (shortIncluded ? "included_proven_incremental_or_zero" : "present_not_included_overlap_unproven")
++        : short.status === "ambiguous" ? "ambiguous" : "not_separately_identified_unknown",
++      fact: describe(short)
++    },
++    unresolved_reasons: reasons, review_flags: flags,
++    other_concepts_discovered: discovered,
++    rejected_facts: [...cur.rejected, ...non.rejected, ...short.rejected],
++    production_write: false, rankings_changed: false
++  };
++}
+diff -ruN -x node_modules a/worker/legacy-debt-shadow.test.mjs b/worker/legacy-debt-shadow.test.mjs
+--- a/worker/legacy-debt-shadow.test.mjs	1970-01-01 00:00:00.000000000 +0000
++++ b/worker/legacy-debt-shadow.test.mjs	2026-11-22 04:18:32.981526532 +0000
+@@ -0,0 +1,147 @@
++import assert from "node:assert/strict";
++import testCase from "node:test";
++import { resolveLegacyDebtShadow } from "./legacy-debt-shadow.mjs";
++import { readFileSync } from "node:fs";
++
++const ACC = "0000000000-26-000001", END = "2025-12-31";
++const M = 1e6;
++function fact(val, extra = {}) { return { val, accn: ACC, end: END, filed: "2026-02-20", form: "10-K", ...extra }; }
++function build(spec) {
++  const out = { facts: { "us-gaap": {} } };
++  for (const [tag, v] of Object.entries(spec)) {
++    const list = Array.isArray(v) ? v : [v];
++    out.facts["us-gaap"][tag] = { units: { USD: list.map(x => (x && typeof x === "object") ? x : fact(x)) } };
++  }
++  return out;
++}
++const run = spec => resolveLegacyDebtShadow(build(spec), END, ACC);
++
++testCase("BMBL: current + noncurrent", () => {
++  const r = run({ LongTermDebtCurrent: 5.750 * M, LongTermDebtNoncurrent: 582.715 * M });
++  assert.equal(r.status, "candidate");
++  assert.ok(Math.abs(r.candidate_conventional_debt - 588.465 * M) < 1);
++  assert.equal(r.short_term_borrowing.status, "not_separately_identified_unknown");
++  assert.equal(r.short_term_borrowing.separately_identified, false);
++  assert.equal(r.components.current_long_term_debt.concept, "us-gaap:LongTermDebtCurrent");
++  assert.equal(r.production_write, false); assert.equal(r.rankings_changed, false);
++});
++testCase("OTEX: current + noncurrent", () => {
++  const r = run({ LongTermDebtCurrent: 35.850 * M, LongTermDebtNoncurrent: 5734.519 * M });
++  assert.ok(Math.abs(r.candidate_conventional_debt - 5770.369 * M) < 1);
++});
++testCase("UPWK: explicit reported zero noncurrent is filing-supported", () => {
++  const r = run({ LongTermDebtCurrent: 359.770 * M, LongTermDebtNoncurrent: 0 });
++  assert.equal(r.candidate_conventional_debt, 359.770 * M);
++  assert.equal(r.components.noncurrent_long_term_debt.reported, true);
++  assert.equal(r.components.noncurrent_long_term_debt.value, 0);
++});
++testCase("UPWK-like: absent noncurrent is NOT zero", () => {
++  const r = run({ LongTermDebtCurrent: 359.770 * M });
++  assert.equal(r.candidate_conventional_debt, null);
++  assert.equal(r.status, "unresolved_insufficient_inputs");
++  assert.ok(r.unresolved_reasons.includes("missing_noncurrent_long_term_debt"));
++});
++testCase("BCRX control: royalty financing and finance leases stay separate", () => {
++  const r = run({
++    LongTermDebtCurrent: 0, LongTermDebtNoncurrent: 0,
++    RoyaltyFinancingLiabilityCurrent: 38.455 * M, RoyaltyFinancingLiabilityNoncurrent: 427.233 * M,
++    FinanceLeaseLiabilityCurrent: 1.312 * M, FinanceLeaseLiabilityNoncurrent: 1.441 * M
++  });
++  assert.equal(r.candidate_conventional_debt, 0);
++  assert.equal(r.status, "candidate_scope_review_required");
++  assert.ok(r.review_flags.includes("scope_review_required_royalty_or_other_financing"));
++  assert.ok(r.review_flags.includes("separate_lease_evidence_not_included"));
++  const royalty = r.other_concepts_discovered.filter(d => d.category === "royalty_or_other_financing");
++  assert.equal(royalty.reduce((s, d) => s + d.value, 0), 465.688 * M);
++  assert.ok(r.other_concepts_discovered.every(d => d.included_in_candidate === false));
++});
++testCase("IRWD-like: no recognised facts => insufficient evidence, not zero", () => {
++  const r = run({ Revenues: 1 });
++  assert.equal(r.status, "insufficient_evidence");
++  assert.equal(r.candidate_conventional_debt, null);
++  assert.ok(r.unresolved_reasons.includes("no_recognised_debt_evidence_not_proof_of_no_debt"));
++});
++testCase("IRWD-like: broader discovery surfaces unrecognised tags without using them", () => {
++  const r = run({ NotesPayable: 100 * M });
++  assert.equal(r.candidate_conventional_debt, null);
++  assert.equal(r.status, "unresolved_insufficient_inputs");
++  assert.equal(r.other_concepts_discovered[0].concept, "us-gaap:NotesPayable");
++});
++testCase("missing current component", () => {
++  const r = run({ LongTermDebtNoncurrent: 10 });
++  assert.equal(r.candidate_conventional_debt, null);
++  assert.ok(r.unresolved_reasons.includes("missing_current_long_term_debt"));
++});
++testCase("short-term borrowings incremental only when aggregate proves it", () => {
++  const ok = run({ LongTermDebtCurrent: 5, ShortTermBorrowings: 3, DebtCurrent: 8, LongTermDebtNoncurrent: 90 });
++  assert.equal(ok.candidate_conventional_debt, 98);
++  assert.equal(ok.calculation_method, "current_plus_short_term_plus_noncurrent_long_term_debt");
++  assert.equal(ok.short_term_borrowing.separately_identified, true);
++  const unproven = run({ LongTermDebtCurrent: 5, ShortTermBorrowings: 3, LongTermDebtNoncurrent: 90 });
++  assert.equal(unproven.candidate_conventional_debt, null);
++  assert.equal(unproven.status, "unresolved_ambiguous");
++  assert.ok(unproven.unresolved_reasons.includes("short_term_borrowings_overlap_unproven"));
++});
++testCase("aggregate equal to current component is not double counted", () => {
++  const r = run({ LongTermDebtCurrent: 5, DebtCurrent: 5, LongTermDebtNoncurrent: 90 });
++  assert.equal(r.candidate_conventional_debt, 95);
++});
++testCase("aggregate conflicting with components stays unresolved", () => {
++  const r = run({ LongTermDebtCurrent: 5, DebtCurrent: 50, LongTermDebtNoncurrent: 90 });
++  assert.equal(r.candidate_conventional_debt, null);
++  assert.ok(r.unresolved_reasons.includes("current_aggregate_conflicts_with_components"));
++});
++testCase("debt-and-lease aggregate is not used as conventional debt", () => {
++  const r = run({ LongTermDebtCurrent: 5, LongTermDebtAndFinanceLeaseObligationsNoncurrent: 95 });
++  assert.equal(r.candidate_conventional_debt, null);
++  assert.ok(r.review_flags.includes("debt_and_lease_aggregate_present_not_used"));
++});
++testCase("mixed accession, period, unit and dimension facts are rejected", () => {
++  const spec = build({ LongTermDebtCurrent: 5, LongTermDebtNoncurrent: 90 });
++  const cur = spec.facts["us-gaap"].LongTermDebtCurrent.units;
++  cur.USD.push(fact(999, { accn: "other" }), fact(998, { end: "2024-12-31" }),
++    fact(997, { segment: { member: "X" } }), fact(996, { start: "2025-01-01" }));
++  cur.EUR = [fact(995)];
++  const r = resolveLegacyDebtShadow(spec, END, ACC);
++  assert.equal(r.candidate_conventional_debt, 95);
++  const reasons = r.rejected_facts.map(x => x.reason).sort();
++  assert.deepEqual(reasons, ["dimensional_fact", "non_usd_unit", "period_mismatch", "period_mismatch"]);
++});
++testCase("only non-USD fact => unresolved", () => {
++  const spec = build({ LongTermDebtNoncurrent: 90 });
++  spec.facts["us-gaap"].LongTermDebtCurrent = { units: { EUR: [fact(5)] } };
++  const r = resolveLegacyDebtShadow(spec, END, ACC);
++  assert.equal(r.candidate_conventional_debt, null);
++  assert.equal(r.rejected_facts[0].reason, "non_usd_unit");
++});
++testCase("duplicate identical facts are fine; competing values are ambiguous", () => {
++  const same = run({ LongTermDebtCurrent: [fact(5), fact(5, { filed: "2026-03-01" })], LongTermDebtNoncurrent: 90 });
++  assert.equal(same.candidate_conventional_debt, 95);
++  assert.equal(same.components.current_long_term_debt.filed, "2026-03-01");
++  const diff = run({ LongTermDebtCurrent: [fact(5), fact(6, { filed: "2026-03-01" })], LongTermDebtNoncurrent: 90 });
++  assert.equal(diff.candidate_conventional_debt, null);
++  assert.equal(diff.status, "unresolved_ambiguous");
++});
++testCase("reported zero for both components stays zero, absent stays unknown", () => {
++  assert.equal(run({ LongTermDebtCurrent: 0, LongTermDebtNoncurrent: 0 }).candidate_conventional_debt, 0);
++  assert.equal(run({ LongTermDebtCurrent: 0 }).candidate_conventional_debt, null);
++});
++testCase("LongTermDebt total mismatch is flagged, not blocking", () => {
++  const r = run({ LongTermDebtCurrent: 5, LongTermDebtNoncurrent: 90, LongTermDebt: 100 });
++  assert.equal(r.candidate_conventional_debt, 95);
++  assert.ok(r.review_flags.includes("long_term_debt_total_differs_from_candidate"));
++});
++testCase("endpoint is authenticated, shadow-only and never writes", () => {
++  const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
++  const start = src.indexOf('"/api/fundamentals/legacy-debt-shadow-preview"');
++  assert.ok(start > 0);
++  const end = src.indexOf('"/api/fundamentals/legacy-debt-diagnostic"', start);
++  assert.ok(end > start);
++  const block = src.slice(start, end);
++  assert.match(block, /UNIVERSE_SYNC_TOKEN/);
++  assert.match(block, /Unauthorized[\s\S]*401|401/);
++  assert.match(block, /production_write:false/);
++  assert.match(block, /rankings_changed:false/);
++  assert.doesNotMatch(block, /INSERT|UPDATE|DELETE|REPLACE|\.run\(|\.batch\(/i);
++  assert.doesNotMatch(block, /stock_fundamentals\s*\(|ranking_snapshot/i);
++});
