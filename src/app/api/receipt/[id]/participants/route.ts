@@ -12,7 +12,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!exists) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const pid = crypto.randomUUID()
-  await DB.prepare('INSERT INTO participants (id, receipt_id, name) VALUES (?, ?, ?)').bind(pid, id, trimmed).run()
+  await DB.batch([
+    DB.prepare('INSERT INTO participants (id, receipt_id, name) VALUES (?, ?, ?)').bind(pid, id, trimmed),
+    DB.prepare('UPDATE receipts SET version = version + 1 WHERE id = ?').bind(id),
+  ])
   const participant = await DB.prepare('SELECT * FROM participants WHERE id = ?').bind(pid).first()
   return NextResponse.json(participant)
 }

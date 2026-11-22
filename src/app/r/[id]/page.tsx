@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import type { Receipt, ReceiptItem, Participant, Selection } from '@/lib/types'
 import { Loader2, CheckCircle } from 'lucide-react'
 
@@ -25,33 +25,86 @@ export default function ReceiptPage({ params }: Props) {
 
   useEffect(() => { params.then(p => setReceiptId(p.id)) }, [params])
 
-  const fetchAll = useCallback(async (rid: string) => {
+  // --- Smart polling -------------------------------------------------------
+  // Asks the server "has anything changed since version N?" (1 cheap row read).
+  // Backs off 3s -> 30s while idle; resets to fast on change, own action, or tab return.
+  const DELAYS = [3000, 3000, 5000, 8000, 15000, 30000]
+  const versionRef = useRef(-1)
+  const stepRef = useRef(0)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inFlightRef = useRef(false)
+  const loopRef = useRef<(() => Promise<void>) | null>(null)
+
+  const poll = useCallback(async (rid: string): Promise<boolean> => {
+    // returns false when polling should stop (receipt doesn't exist)
     try {
-      const res = await fetch(`/api/receipt/${rid}`, { cache: 'no-store' })
+      const res = await fetch(`/api/receipt/${rid}?v=${versionRef.current}`, { cache: 'no-store' })
+      if (res.status === 404) { setLoading(false); return false }
       if (res.ok) {
         const d = await res.json()
-        setReceipt(d.receipt)
-        setItems(d.items)
-        setParticipants(d.participants)
-        setAllSelections(d.selections)
+        if (d.changed) {
+          if (d.receipt) setReceipt(d.receipt)
+          if (d.items) setItems(d.items)
+          setParticipants(d.participants)
+          setAllSelections(d.selections)
+          versionRef.current = d.version
+          stepRef.current = 0
+        } else {
+          stepRef.current = Math.min(stepRef.current + 1, DELAYS.length - 1)
+        }
       }
     } catch {
-      // transient network error; next poll will retry
+      // transient network error; try again on the next tick
+      stepRef.current = Math.min(stepRef.current + 1, DELAYS.length - 1)
     }
     setLoading(false)
+    return true
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Poll instead of Supabase Realtime (paused while the tab is hidden)
   useEffect(() => {
     if (!receiptId) return
-    fetchAll(receiptId)
-    const timer = setInterval(() => {
-      if (document.visibilityState === 'visible') fetchAll(receiptId)
-    }, 4000)
-    const onVisible = () => { if (document.visibilityState === 'visible') fetchAll(receiptId) }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible) }
-  }, [receiptId, fetchAll])
+    let cancelled = false
+
+    const loop = async () => {
+      if (cancelled) return
+      if (document.visibilityState === 'visible') {
+        inFlightRef.current = true
+        const keepGoing = await poll(receiptId)
+        inFlightRef.current = false
+        if (!keepGoing || cancelled) return
+      }
+      timerRef.current = setTimeout(loop, DELAYS[stepRef.current])
+    }
+    loopRef.current = loop
+
+    const wake = () => {
+      if (document.visibilityState !== 'visible') return
+      stepRef.current = 0
+      if (!inFlightRef.current) {
+        if (timerRef.current) clearTimeout(timerRef.current)
+        loop()
+      }
+    }
+
+    loop()
+    document.addEventListener('visibilitychange', wake)
+    return () => {
+      cancelled = true
+      if (timerRef.current) clearTimeout(timerRef.current)
+      document.removeEventListener('visibilitychange', wake)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [receiptId, poll])
+
+  // After the user does something, go back to fast polling so they see others react
+  function nudge() {
+    stepRef.current = 0
+    if (!inFlightRef.current) {
+      if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => loopRef.current?.(), DELAYS[0])
+    }
+  }
 
   async function handleJoin() {
     if (!name.trim() || !receiptId) return
@@ -66,6 +119,7 @@ export default function ReceiptPage({ params }: Props) {
         const p: Participant = await res.json()
         setMe(p)
         setParticipants(prev => prev.some(x => x.id === p.id) ? prev : [...prev, p])
+        nudge()
       }
     } finally {
       setJoining(false)
@@ -86,6 +140,7 @@ export default function ReceiptPage({ params }: Props) {
       const without = prev.filter(s => !(s.participant_id === me.id && s.receipt_item_id === itemId))
       return data.deleted ? without : [...without, data]
     })
+    nudge()
   }
 
   const mySelections = me ? allSelections.filter(s => s.participant_id === me.id) : []

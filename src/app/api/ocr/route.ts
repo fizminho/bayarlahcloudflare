@@ -13,6 +13,10 @@ export async function POST(req: NextRequest) {
   const { base64, mimeType } = await req.json()
   const apiKey = env().GEMINI_API_KEY
 
+  if (!apiKey) {
+    return NextResponse.json({ error: 'GEMINI_API_KEY is not set on this Worker' }, { status: 500 })
+  }
+
   const body = JSON.stringify({
     contents: [{
       parts: [
@@ -24,18 +28,38 @@ export async function POST(req: NextRequest) {
     }]
   })
 
+  let lastError = 'unknown error'
+
   for (const model of MODELS) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
     for (let attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 5000))
-      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body })
-      if (!RETRYABLE.has(res.status)) {
-        const json = await res.json()
-        const text = json.candidates?.[0]?.content?.parts?.[0]?.text ?? '[]'
-        return NextResponse.json({ text })
+      if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 3000))
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body,
+      })
+
+      if (res.ok) {
+        const json = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
+        const text = json.candidates?.[0]?.content?.parts?.[0]?.text
+        if (text) return NextResponse.json({ text })
+        lastError = `${model}: empty response`
+        break // try next model
       }
+
+      const detail = (await res.text()).slice(0, 300)
+      lastError = `${model} -> ${res.status}: ${detail}`
+      console.error('[OCR]', lastError)
+
+      if (RETRYABLE.has(res.status)) continue // retry same model
+      if (res.status === 401 || res.status === 403 || res.status === 400) {
+        // bad key / bad request: other models will fail the same way
+        return NextResponse.json({ error: lastError }, { status: 502 })
+      }
+      break // 404 etc: try next model
     }
   }
 
-  return NextResponse.json({ error: 'All Gemini models unavailable' }, { status: 503 })
+  return NextResponse.json({ error: lastError }, { status: 502 })
 }
