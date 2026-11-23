@@ -1,11 +1,11 @@
-const VERSION = 'bayarlah-pwa-v1'
+const VERSION = 'bayarlah-pwa-v2'
 const STATIC_CACHE = VERSION + '-static'
 const OFFLINE_URL = '/offline'
 
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(STATIC_CACHE)
-    await cache.addAll([OFFLINE_URL, '/icons/icon-192.svg', '/icons/icon-512.svg'])
+    await cache.addAll([OFFLINE_URL, '/icons/icon-192.svg', '/icons/icon-512.svg', '/icons/icon.svg', '/icons/apple-touch-icon.svg'])
     await self.skipWaiting()
   })())
 })
