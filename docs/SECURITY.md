@@ -36,10 +36,12 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 - Expired rate-limit buckets need scheduled cleanup or bounded retention. Configure a Worker Cron cleanup before the rate-limit table grows significantly.
 - CSP permits inline scripts for compatibility with current Next.js rendering. A nonce-based CSP can tighten this after validating Cloudflare/OpenNext output.
 - There is no participant revocation or receipt deletion feature yet.
-- Automated Node.js tests cover exact-origin checks, JSON content-type and size handling, UUID validation, participant cookie naming, SHA-256 output and rate-limit enforcement. These tests use a lightweight D1 mock for the rate-limit contract; they do not replace live D1 concurrency tests.
+- Automated Node.js tests cover exact-origin checks, JSON content-type and size handling, UUID validation, participant cookie naming, SHA-256 output, rate-limit enforcement and participant capability isolation (receipt ID + participant ID + hashed token). The rate-limit contract uses a lightweight D1 mock.
+- SQLite integration tests execute both production migrations in an in-memory SQLite database and verify receipt-boundary enforcement, over-claim prevention on INSERT, over-claim prevention on UPDATE, cross-receipt UPDATE rejection and valid quantity adjustments.
+- Selection deletion is additionally scoped to the receipt ID in its SQL predicate, providing defense in depth for legacy or inconsistent rows.
 - GitHub Actions runs ESLint, the security test suite and a Next.js production build on pushes to `main` / this hardening branch and pull requests targeting `main`.
 - Current dependency metadata has a peer-range conflict: the resolved `@opennextjs/cloudflare` release does not declare compatibility with the repository's pinned Next.js `16.2.7`. CI currently uses `--legacy-peer-deps` to proceed with verification; this is a compatibility warning to resolve by aligning/pinning the adapter and Next.js versions, not a security control.
-- GitHub Actions run `45116385152` completed successfully for the automated security tests, ESLint and Next.js production build. Live D1 migration, browser multi-session tests and production verification remain outstanding.
+- GitHub Actions run `45118517568` completed successfully: ESLint, all 15 automated tests and the Next.js production build passed. Live Cloudflare D1 migration, browser multi-session tests and production verification remain outstanding.
 
 ## Verification checklist
 
