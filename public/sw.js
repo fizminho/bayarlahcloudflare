@@ -1,4 +1,4 @@
-const VERSION = 'bayarlah-pwa-v2'
+const VERSION = 'bayarlah-pwa-v3'
 const STATIC_CACHE = VERSION + '-static'
 const OFFLINE_URL = '/offline'
 
