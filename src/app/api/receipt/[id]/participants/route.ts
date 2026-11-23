@@ -21,6 +21,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   ])
   const participant = await DB.prepare('SELECT id, receipt_id, name, joined_at FROM participants WHERE id = ?').bind(pid).first()
   const response = NextResponse.json(participant, { headers: { 'Cache-Control': 'no-store' } })
-  response.cookies.set(participantCookieName(pid), token, { httpOnly: true, secure: true, sameSite: 'strict', path: '/', maxAge: 2592000 })
+  response.cookies.set(participantCookieName(id), token, { httpOnly: true, secure: true, sameSite: 'strict', path: '/', maxAge: 2592000 })
   return response
 }
