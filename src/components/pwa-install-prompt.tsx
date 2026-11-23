@@ -1,33 +1,43 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 
 type InstallPromptEvent = Event & {
   prompt: () => Promise<void>
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
 }
 
+const subscribeToInstallState = (callback: () => void) => {
+  const media = window.matchMedia('(display-mode: standalone)')
+  media.addEventListener('change', callback)
+  window.addEventListener('appinstalled', callback)
+  return () => {
+    media.removeEventListener('change', callback)
+    window.removeEventListener('appinstalled', callback)
+  }
+}
+
+const getIosInstallState = () => {
+  const ua = window.navigator.userAgent
+  const ios = /iPad|iPhone|iPod/.test(ua) ||
+    (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1)
+  const standalone = window.matchMedia('(display-mode: standalone)').matches ||
+    ('standalone' in window.navigator && Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone))
+  return ios && !standalone
+}
+
 export default function PwaInstallPrompt() {
+  const isIos = useSyncExternalStore(subscribeToInstallState, getIosInstallState, () => false)
   const [promptEvent, setPromptEvent] = useState<InstallPromptEvent | null>(null)
-  const [isIos, setIsIos] = useState(false)
   const [showIosHelp, setShowIosHelp] = useState(false)
 
   useEffect(() => {
-    const ua = window.navigator.userAgent
-    const ios = /iPad|iPhone|iPod/.test(ua) ||
-      (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1)
-    const standalone = window.matchMedia('(display-mode: standalone)').matches ||
-      ('standalone' in window.navigator && Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone))
-
-    if (ios && !standalone) setIsIos(true)
-
     const onPrompt = (event: Event) => {
       event.preventDefault()
       setPromptEvent(event as InstallPromptEvent)
     }
     const onInstalled = () => {
       setPromptEvent(null)
-      setIsIos(false)
       setShowIosHelp(false)
     }
 
