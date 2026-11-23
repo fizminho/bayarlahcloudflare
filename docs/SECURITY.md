@@ -5,11 +5,11 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 ## Implemented on this branch
 
 - Same-origin validation for state-changing receipt, participant, selection and OCR endpoints.
-- Bounded JSON request bodies and strict validation for receipt titles, amounts, item names, quantities and OCR image types/sizes.
+- Bounded JSON request bodies and strict validation for receipt titles, amounts, item names, quantities and OCR image types/sizes. OCR validates JPEG, PNG and WebP file signatures against the declared MIME type, not just the client-supplied header.
 - D1-backed fixed-window rate limits for receipt creation, participant joins and selection updates; OCR has its own IP-based quota.
 - Participant capability tokens are cryptographically random, stored only as SHA-256 hashes in D1 and issued in HttpOnly, Secure, SameSite=Strict cookies. Public participant IDs are not authorization secrets.
 - Selection writes verify the capability token against the participant and receipt. Capacity checks are performed in the write statement itself, and D1 triggers enforce same-receipt ownership and aggregate quantity limits as defense in depth.
-- OCR provider keys remain server-side; provider errors and image/prompt contents are not returned or logged. Provider calls have a hard timeout and model allowlist.
+- OCR provider keys remain server-side; provider errors and image/prompt contents are not returned or logged. Provider calls share a single 20-second request-wide deadline across the model fallback list, with an explicit model allowlist.
 - Security headers include CSP, HSTS, frame denial, no-sniff, referrer and permissions policies; powered-by header is disabled.
 - API responses containing shared receipt state are marked no-store.
 
@@ -36,7 +36,7 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 - Expired rate-limit buckets need scheduled cleanup or bounded retention. Configure a Worker Cron cleanup before the rate-limit table grows significantly.
 - CSP permits inline scripts for compatibility with current Next.js rendering. A nonce-based CSP can tighten this after validating Cloudflare/OpenNext output.
 - There is no participant revocation or receipt deletion feature yet.
-- Automated Node.js tests cover exact-origin checks, JSON content-type and size handling, UUID validation, participant cookie naming, SHA-256 output, rate-limit enforcement and participant capability isolation (receipt ID + participant ID + hashed token). The rate-limit contract uses a lightweight D1 mock.
+- Automated Node.js tests cover exact-origin checks, JSON content-type and size handling, UUID validation, participant cookie naming, SHA-256 output, rate-limit enforcement and participant capability isolation (receipt ID + participant ID + hashed token), and OCR image signature, MIME mismatch, malformed base64 and size validation. The rate-limit contract uses a lightweight D1 mock.
 - SQLite integration tests execute both production migrations in an in-memory SQLite database and verify receipt-boundary enforcement, over-claim prevention on INSERT, over-claim prevention on UPDATE, cross-receipt UPDATE rejection and valid quantity adjustments.
 - Selection deletion is additionally scoped to the receipt ID in its SQL predicate, providing defense in depth for legacy or inconsistent rows.
 - GitHub Actions runs ESLint, the security test suite and a Next.js production build on pushes to `main` / this hardening branch and pull requests targeting `main`.
