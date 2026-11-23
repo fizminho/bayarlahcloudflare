@@ -59,7 +59,7 @@ test('database triggers reject claims that exceed item quantity', () => {
     )
     insert.run('selection-a', ids.participantA, ids.itemA, 1)
     insert.run('selection-b', ids.participantB, ids.itemA, 1)
-    assert.throws(() => insert.run('selection-c', ids.participantC, ids.itemA, 1), /selection receipt mismatch/)
+    assert.throws(() => insert.run('selection-c', ids.participantC, ids.itemA, 1), /selection quantity exceeds availability/)
     assert.equal(db.prepare('SELECT SUM(qty) AS total FROM selections WHERE receipt_item_id = ?').get(ids.itemA).total, 2)
   } finally {
     db.close()
