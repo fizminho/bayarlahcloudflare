@@ -8,7 +8,7 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 - Bounded JSON request bodies and strict validation for receipt titles, amounts, item names, quantities and OCR image types/sizes.
 - D1-backed fixed-window rate limits for receipt creation, participant joins and selection updates; OCR has its own IP-based quota.
 - Participant capability tokens are cryptographically random, stored only as SHA-256 hashes in D1 and issued in HttpOnly, Secure, SameSite=Strict cookies. Public participant IDs are not authorization secrets.
-- Selection writes verify the capability token against the participant and receipt, validate item ownership and prevent aggregate claims from exceeding item quantity.
+- Selection writes verify the capability token against the participant and receipt. Capacity checks are performed in the write statement itself, and D1 triggers enforce same-receipt ownership and aggregate quantity limits as defense in depth.
 - OCR provider keys remain server-side; provider errors and image/prompt contents are not returned or logged. Provider calls have a hard timeout and model allowlist.
 - Security headers include CSP, HSTS, frame denial, no-sniff, referrer and permissions policies; powered-by header is disabled.
 - API responses containing shared receipt state are marked no-store.
@@ -32,8 +32,21 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 ## Known limitations and follow-up
 
 - IP-based D1 limits use a SHA-256 fingerprint of CF-Connecting-IP; this is pseudonymous, not keyed HMAC.
-- Selection quantity checks happen before writes. Concurrent updates can race; a transaction/constraint-based reservation model should make aggregate caps strictly atomic.
-- Expired rate-limit buckets need scheduled cleanup or bounded retention.
+- Selection capacity is guarded by a conditional INSERT/UPSERT and D1 triggers. Keep the SQL checks and triggers aligned if selection logic changes.
+- Expired rate-limit buckets need scheduled cleanup or bounded retention. Configure a Worker Cron cleanup before the rate-limit table grows significantly.
 - CSP permits inline scripts for compatibility with current Next.js rendering. A nonce-based CSP can tighten this after validating Cloudflare/OpenNext output.
 - There is no participant revocation or receipt deletion feature yet.
 - Automated tests and production verification have not been run for this change. Run lint, build, migrations and multi-session smoke tests before merge/deploy.
+
+## Verification checklist
+
+- Create a receipt with valid totals; reject mismatched totals, empty names, negative values, more than 100 items and oversized JSON.
+- Submit receipt creation and OCR from a different Origin; expect 403.
+- Join a receipt; confirm the participant cookie is HttpOnly, Secure and SameSite=Strict, and no token is returned in JSON or stored in plaintext.
+- Refresh the participant page; confirm the cookie restores only that browser's participant identity.
+- Change a participant ID in the selection request; expect 403. Remove the cookie; expect 401.
+- Attempt to select an item from another receipt; expect 409 and no database change.
+- Have two participants concurrently claim the final available unit; only one write should succeed.
+- Exceed each configured rate limit; requests after the limit must receive 429.
+- Confirm GET share endpoints remain public by design and return no-store cache headers.
+- Confirm browser response headers include CSP, HSTS, frame denial, no-sniff and referrer policy.
