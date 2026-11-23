@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { env } from '@/lib/cf'
-import { consumeRateLimit, jsonError, participantCookieName, participantOwnsReceipt, readJson, sameOrigin, sha256, validId } from '@/lib/security'
+import { consumeRateLimit, jsonError, participantCookieName, participantOwnsReceipt, readJson, sameOrigin, validId } from '@/lib/security'
 
 type Body = { participant_id?: string; receipt_item_id?: string; qty?: number }
 
@@ -20,8 +20,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const qty = body.qty as number
   if (qty === 0) {
-    const result = await DB.prepare('DELETE FROM selections WHERE participant_id = ? AND receipt_item_id = ?
-       AND EXISTS (SELECT 1 FROM receipt_items i WHERE i.id = selections.receipt_item_id AND i.receipt_id = ?)')
+    const result = await DB.prepare(`DELETE FROM selections WHERE participant_id = ? AND receipt_item_id = ?
+       AND EXISTS (SELECT 1 FROM receipt_items i WHERE i.id = selections.receipt_item_id AND i.receipt_id = ?)`)
       .bind(body.participant_id, body.receipt_item_id, id).run()
     if ((result.meta?.changes ?? 0) > 0) {
       await DB.prepare('UPDATE receipts SET version = version + 1 WHERE id = ?').bind(id).run()
