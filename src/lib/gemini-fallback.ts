@@ -48,6 +48,7 @@ export async function runGeminiFallback(
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), remaining)
       let response: Response
+      let responseData: unknown = null
       try {
         response = await fetcher(url, {
           method: 'POST',
@@ -55,6 +56,8 @@ export async function runGeminiFallback(
           body: requestBody,
           signal: controller.signal,
         })
+        // Keep the deadline active while consuming the provider response body too.
+        if (response.ok) responseData = await response.json()
       } catch {
         attempts.push({ model, attempt: attempt + 1, outcome: 'network-error' })
         break
@@ -64,9 +67,8 @@ export async function runGeminiFallback(
 
       lastStatus = response.status
       if (response.ok) {
-        const data = await response.json()
         attempts.push({ model, attempt: attempt + 1, status: response.status, outcome: 'success' })
-        return { data, model, attempts, lastStatus }
+        return { data: responseData, model, attempts, lastStatus }
       }
 
       const retryable = RETRYABLE_STATUSES.has(response.status)
