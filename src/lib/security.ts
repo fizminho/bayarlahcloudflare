@@ -8,8 +8,9 @@ export function sameOrigin(req: NextRequest): boolean {
 }
 
 export async function readJson<T>(req: NextRequest, maxBytes = 32 * 1024): Promise<T | null> {
+  if (!req.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return null
   const length = Number(req.headers.get('content-length') ?? 0)
-  if (length > maxBytes) return null
+  if (Number.isFinite(length) && length > maxBytes) return null
   const raw = await req.text()
   if (new TextEncoder().encode(raw).byteLength > maxBytes) return null
   try { return JSON.parse(raw) as T } catch { return null }
