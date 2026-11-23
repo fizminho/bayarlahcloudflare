@@ -1,6 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
-
-type D1 = ReturnType<typeof import('@opennextjs/cloudflare').getCloudflareContext>['env']['DB']
+import { NextRequest, NextResponse } from 'next/server.js'
 
 export function sameOrigin(req: NextRequest): boolean {
   const origin = req.headers.get('origin')
