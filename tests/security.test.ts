@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { NextRequest } from 'next/server'
+import { NextRequest } from 'next/server.js'
 import {
   consumeRateLimit,
   participantCookieName,
@@ -107,7 +107,7 @@ test('sha256 returns a stable lowercase hexadecimal digest', async () => {
 test('rate limiting accepts only the configured number of hits', async () => {
   let hitCount = 0
   const db = {
-    prepare: (_sql: string) => ({
+    prepare: () => ({
       bind: (...values: unknown[]) => ({
         run: async () => {
           const limit = Number(values[2])
