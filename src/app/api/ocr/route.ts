@@ -1,65 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { env } from '@/lib/cf'
+import { consumeRateLimit, jsonError, readJson, sameOrigin } from '@/lib/security'
 
-const MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-]
-const RETRYABLE = new Set([429, 503, 502, 500])
+const MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite']
+const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+type Body = { base64?: string; mimeType?: string }
 
 export async function POST(req: NextRequest) {
-  const { base64, mimeType } = await req.json()
-  const apiKey = env().GEMINI_API_KEY
-
-  if (!apiKey) {
-    return NextResponse.json({ error: 'GEMINI_API_KEY is not set on this Worker' }, { status: 500 })
+  if (!sameOrigin(req)) return jsonError('Invalid request origin', 403)
+  const { DB, GEMINI_API_KEY } = env()
+  if (!await consumeRateLimit(DB, req, 'ocr', 5, 3600)) return jsonError('OCR limit reached. Try again later.', 429)
+  const input = await readJson<Body>(req, 7 * 1024 * 1024)
+  if (!input || typeof input.base64 !== 'string' || typeof input.mimeType !== 'string' || !ALLOWED_MIME.has(input.mimeType)) {
+    return jsonError('Invalid image request', 400)
   }
+  const base64 = input.base64.replace(/^data:[^,]+,/, '')
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64) || base64.length > Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 4) {
+    return jsonError('Image is too large or invalid', 413)
+  }
+  if (Math.floor(base64.length * 3 / 4) > MAX_IMAGE_BYTES) return jsonError('Image is too large', 413)
+  if (!GEMINI_API_KEY) return jsonError('OCR service is unavailable', 503)
 
-  const body = JSON.stringify({
-    contents: [{
-      parts: [
-        {
-          text: `You are a receipt parser. Extract all purchased line items and tax from this receipt image. Return ONLY a valid JSON object, no markdown, no explanation.\n\nRules:\n- "items" array: each object must have item_name (string), quantity (integer), price (number, per-unit price in RM)\n- "tax" field: total of all tax/SST/GST/service charge lines combined as a single RM number (0 if none)\n- The rightmost number column on the receipt is the LINE TOTAL (quantity x unit price)\n- Calculate unit price = line total / quantity\n- Every item MUST have a price greater than 0.00 unless it is explicitly marked as free or RM0.00 on the receipt\n- If you cannot read a price clearly, make your best estimate based on surrounding context\n- Ignore lines for: subtotal, rounding, total, cash, change, credit, debit\n\nFormat: {"items":[{"item_name":"...","quantity":1,"price":0.00}],"tax":0.00}`
-        },
-        { inline_data: { mime_type: mimeType, data: base64 } }
-      ]
-    }]
-  })
-
-  let lastError = 'unknown error'
-
+  const prompt = 'Extract purchased line items and tax from this receipt. Return only JSON: {"items":[{"item_name":"string","quantity":1,"price":0}],"tax":0}. price is per-unit RM amount. Ignore subtotal, rounding, total, cash and change.'
+  const payload = JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: input.mimeType, data: base64 } }] }] })
   for (const model of MODELS) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) await new Promise(r => setTimeout(r, attempt * 3000))
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body,
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 20000)
+    try {
+      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY }, body: payload, signal: controller.signal,
       })
-
-      if (res.ok) {
-        const json = await res.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
-        const text = json.candidates?.[0]?.content?.parts?.[0]?.text
-        if (text) return NextResponse.json({ text })
-        lastError = `${model}: empty response`
-        break // try next model
+      if (response.ok) {
+        const result = await response.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
+        const text = result.candidates?.[0]?.content?.parts?.[0]?.text
+        if (text) return NextResponse.json({ text }, { headers: { 'Cache-Control': 'no-store' } })
       }
-
-      const detail = (await res.text()).slice(0, 300)
-      lastError = `${model} -> ${res.status}: ${detail}`
-      console.error('[OCR]', lastError)
-
-      if (RETRYABLE.has(res.status)) continue // retry same model
-      if (res.status === 401 || res.status === 403 || res.status === 400) {
-        // bad key / bad request: other models will fail the same way
-        return NextResponse.json({ error: lastError }, { status: 502 })
-      }
-      break // 404 etc: try next model
-    }
+      if (response.status === 401 || response.status === 403) break
+    } catch { /* continue with next allowlisted model */ }
+    finally { clearTimeout(timeout) }
   }
-
-  return NextResponse.json({ error: lastError }, { status: 502 })
+  return jsonError('Unable to read this receipt right now. Please try again.', 502)
 }
