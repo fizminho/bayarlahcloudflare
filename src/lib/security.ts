@@ -75,4 +75,17 @@ export function validId(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
+export async function participantOwnsReceipt(
+  DB: { prepare: (query: string) => { bind: (...values: unknown[]) => { first: <T>() => Promise<T | null> } } },
+  receiptId: string,
+  participantId: string,
+  token: string,
+): Promise<boolean> {
+  if (!validId(receiptId) || !validId(participantId) || !token) return false
+  const row = await DB.prepare(
+    'SELECT id FROM participants WHERE id = ? AND receipt_id = ? AND token_hash = ?'
+  ).bind(participantId, receiptId, await sha256(token)).first<{ id: string }>()
+  return !!row
+}
+
 export function participantCookieName(id: string): string { return 'blp_' + id }
