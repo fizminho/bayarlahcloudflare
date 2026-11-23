@@ -47,6 +47,7 @@ export default function ReceiptPage({ params }: Props) {
           if (d.items) setItems(d.items)
           setParticipants(d.participants)
           setAllSelections(d.selections)
+          setMe(d.me ?? null)
           versionRef.current = d.version
           stepRef.current = 0
         } else {

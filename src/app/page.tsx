@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react'
 import { extractTextFromImage, parseReceiptText, ParsedItem } from '@/lib/ocr'
 import { Loader2, Trash2, Plus, Upload } from 'lucide-react'
+import PwaInstallPrompt from '@/components/pwa-install-prompt'
 
 type Step = 'upload' | 'review' | 'share'
 
@@ -108,6 +109,7 @@ export default function Home() {
   return (
     <ReceiptShell>
       <ReceiptHeader title={step !== 'upload' ? receiptTitle : undefined} />
+      <PwaInstallPrompt />
       <Divider />
 
       {/* STEP: Upload */}

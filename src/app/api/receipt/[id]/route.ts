@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { env } from '@/lib/cf'
+import { participantCookieName, sha256, validId } from '@/lib/security'
 
 const NO_STORE = { 'Cache-Control': 'no-store' }
 
@@ -9,6 +10,7 @@ const NO_STORE = { 'Cache-Control': 'no-store' }
 //  - v differs: returns only participants + selections (receipt/items never change)
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
+  if (!validId(id)) return NextResponse.json({ error: 'Not found' }, { status: 404, headers: NO_STORE })
   const { DB } = env()
   const clientV = Number(new URL(req.url).searchParams.get('v') ?? -1)
 
@@ -35,6 +37,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     )
   }
   const [participants, selections, receipt, items] = await DB.batch(stmts)
+  const capability = req.cookies.get(participantCookieName(id))?.value
+  const me = capability
+    ? await DB.prepare('SELECT id, receipt_id, name, joined_at FROM participants WHERE receipt_id = ? AND token_hash = ?').bind(id, await sha256(capability)).first()
+    : null
 
   return NextResponse.json(
     {
@@ -42,6 +48,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       version: row.version,
       participants: participants.results,
       selections: selections.results,
+      me,
       ...(full ? { receipt: receipt.results[0], items: items.results } : {}),
     },
     { headers: NO_STORE }

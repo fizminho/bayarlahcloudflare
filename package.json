@@ -8,9 +8,12 @@
     "start": "next start",
     "lint": "eslint",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:deploy": "wrangler d1 migrations apply bayarlah --remote && opennextjs-cloudflare deploy",
+    "deploy": "npm run cf:build && npm run cf:deploy",
     "db:migrate:local": "wrangler d1 migrations apply bayarlah --local",
-    "db:migrate:remote": "wrangler d1 migrations apply bayarlah --remote"
+    "db:migrate:remote": "wrangler d1 migrations apply bayarlah --remote",
+    "test": "node --experimental-strip-types --experimental-sqlite --test tests/*.test.ts"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -31,5 +34,8 @@
     "tailwindcss": "^4",
     "typescript": "^5",
     "wrangler": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }
