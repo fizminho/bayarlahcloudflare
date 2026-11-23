@@ -51,8 +51,14 @@ export async function extractTextFromImage(file: File): Promise<string> {
   })
 
   if (!res.ok) {
-    const { error } = await res.json().catch(() => ({ error: '' }))
-    throw new Error(error || 'OCR failed. Please try again in a moment.')
+    const body = await res.json().catch(() => ({ error: '', requestId: '' }))
+    const message = typeof body.error === 'string' && body.error
+      ? body.error
+      : 'OCR failed. Please try again in a moment.'
+    const reference = typeof body.requestId === 'string' && body.requestId
+      ? ` (Reference: ${body.requestId})`
+      : ''
+    throw new Error(message + reference)
   }
   const { text } = await res.json()
   return text

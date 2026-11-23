@@ -13,6 +13,7 @@ export type GeminiAttempt = {
   model: string
   attempt: number
   status?: number
+  providerMessage?: string
   outcome: 'success' | 'retry' | 'fallback' | 'stop' | 'network-error'
 }
 
@@ -23,7 +24,7 @@ export type GeminiFallbackResult = {
   lastStatus: number | null
 }
 
-/** InvestLah-style free-tier model chain with a shared request deadline. */
+/** Free-tier model chain with a shared request deadline. */
 export async function runGeminiFallback(
   apiKey: string,
   requestBody: string,
@@ -49,6 +50,7 @@ export async function runGeminiFallback(
       const timeout = setTimeout(() => controller.abort(), remaining)
       let response: Response
       let responseData: unknown = null
+      let providerMessage: string | undefined
       try {
         response = await fetcher(url, {
           method: 'POST',
@@ -57,7 +59,18 @@ export async function runGeminiFallback(
           signal: controller.signal,
         })
         // Keep the deadline active while consuming the provider response body too.
-        if (response.ok) responseData = await response.json()
+        if (response.ok) {
+          responseData = await response.json()
+        } else {
+          try {
+            const errorBody = await response.json() as { error?: { message?: unknown } }
+            if (typeof errorBody.error?.message === 'string') {
+              providerMessage = errorBody.error.message.slice(0, 240)
+            }
+          } catch {
+            try { await response.body?.cancel() } catch { /* discard provider error body */ }
+          }
+        }
       } catch {
         attempts.push({ model, attempt: attempt + 1, outcome: 'network-error' })
         break
@@ -78,21 +91,17 @@ export async function runGeminiFallback(
         model,
         attempt: attempt + 1,
         status: response.status,
+        ...(providerMessage ? { providerMessage } : {}),
         outcome: shouldRetry ? 'retry' : shouldFallback ? 'fallback' : 'stop',
       })
 
       if (shouldRetry) {
-        try { await response.body?.cancel() } catch { /* discard provider error body */ }
         const delay = Math.min(retryDelayMs * (attempt + 1), Math.max(0, deadline - Date.now()))
         if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay))
         continue
       }
 
-      if (shouldFallback) {
-        try { await response.body?.cancel() } catch { /* discard provider error body */ }
-        break
-      }
-
+      if (shouldFallback) break
       return { data: null, model, attempts, lastStatus }
     }
 
