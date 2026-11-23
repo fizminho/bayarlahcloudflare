@@ -15,7 +15,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const { DB } = env()
   const cookie = req.cookies.get(participantCookieName(id))?.value
   if (!cookie) return jsonError('Participant authorization required', 401)
-  if (!await participantOwnsReceipt(DB, id, body.participant_id, cookie)) return jsonError('Participant authorization failed', 403)
+  if (!await participantOwnsReceipt(DB, id, body.participant_id as string, cookie)) return jsonError('Participant authorization failed', 403)
   if (!await consumeRateLimit(DB, req, 'selection:' + body.participant_id, 60, 60)) return jsonError('Too many updates. Slow down.', 429)
 
   const qty = body.qty as number
