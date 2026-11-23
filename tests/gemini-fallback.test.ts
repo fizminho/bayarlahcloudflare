@@ -12,7 +12,7 @@ test('Gemini fallback retries 429 once, then advances to the next free model', a
     return calls.length <= 2 ? fail(429) : ok()
   }, { retryDelayMs: 0 })
 
-  assert.equal(result.response?.status, 200)
+  assert.ok(result.data)
   assert.equal(result.model, GEMINI_FREE_MODELS[1])
   assert.deepEqual(result.attempts.map(x => x.outcome), ['retry', 'fallback', 'success'])
 })
