@@ -18,11 +18,15 @@ export async function POST(req: NextRequest) {
   if (!base64) return jsonError('Invalid image content or unsupported image format', 400)
   if (!GEMINI_API_KEY) return jsonError('OCR service is unavailable', 503)
 
+  const requestId = crypto.randomUUID()
   const prompt = 'Extract purchased line items and tax from this receipt. Return only JSON: {"items":[{"item_name":"string","quantity":1,"price":0}],"tax":0}. price is per-unit RM amount. Ignore subtotal, rounding, total, cash and change.'
   const payload = JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: input.mimeType, data: base64 } }] }] })
   const fallback = await runGeminiFallback(GEMINI_API_KEY, payload)
   if (fallback.data && typeof fallback.data === 'object') {
-    const result = fallback.data as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
+    const result = fallback.data as {
+      candidates?: { finishReason?: string; content?: { parts?: { text?: string }[] } }[]
+      promptFeedback?: { blockReason?: string }
+    }
     const text = result.candidates?.[0]?.content?.parts?.[0]?.text
     if (text) {
       return NextResponse.json(
@@ -30,7 +34,25 @@ export async function POST(req: NextRequest) {
         { headers: { 'Cache-Control': 'no-store' } },
       )
     }
+
+    console.error('[OCR] Gemini response contained no extractable text', {
+      requestId,
+      model: fallback.model,
+      candidateCount: result.candidates?.length ?? 0,
+      finishReason: result.candidates?.[0]?.finishReason ?? null,
+      blockReason: result.promptFeedback?.blockReason ?? null,
+    })
+  } else {
+    console.error('[OCR] Gemini fallback exhausted', {
+      requestId,
+      model: fallback.model,
+      lastStatus: fallback.lastStatus,
+      attempts: fallback.attempts,
+    })
   }
 
-  return jsonError('Unable to read this receipt right now. Please try again.', 502)
+  return NextResponse.json(
+    { error: 'Unable to read this receipt right now. Please try again.', requestId },
+    { status: 502, headers: { 'Cache-Control': 'no-store' } },
+  )
 }
