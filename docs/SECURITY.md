@@ -36,7 +36,9 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 - Expired rate-limit buckets need scheduled cleanup or bounded retention. Configure a Worker Cron cleanup before the rate-limit table grows significantly.
 - CSP permits inline scripts for compatibility with current Next.js rendering. A nonce-based CSP can tighten this after validating Cloudflare/OpenNext output.
 - There is no participant revocation or receipt deletion feature yet.
-- Automated tests and production verification have not been run for this change. Run lint, build, migrations and multi-session smoke tests before merge/deploy.
+- Automated Node.js tests cover exact-origin checks, JSON content-type and size handling, UUID validation, participant cookie naming, SHA-256 output and rate-limit enforcement. These tests use a lightweight D1 mock for the rate-limit contract; they do not replace live D1 concurrency tests.
+- GitHub Actions runs ESLint, the security test suite and a Next.js production build on pushes to `main` / this hardening branch and pull requests targeting `main`.
+- The workflow has been added but its first hosted run has not yet been observed. Live D1 migration, browser multi-session tests and production verification remain outstanding.
 
 ## Verification checklist
 
