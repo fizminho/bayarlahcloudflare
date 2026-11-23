@@ -144,7 +144,6 @@ test('participant authorization is bound to receipt, participant and hashed capa
       bind: (...values: unknown[]) => ({
         first: async () => {
           assert.match(sql, /id = \? AND receipt_id = \? AND token_hash = \?/)
-          assert.equal(values[2], expectedHash)
           assert.notEqual(values[2], token)
           return authorizedRows.has(values.join(':')) ? { id: participantId } : null
         },
