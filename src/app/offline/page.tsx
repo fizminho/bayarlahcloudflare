@@ -9,6 +9,8 @@ export default function OfflinePage() {
           Connect to the internet to create, open or update a shared receipt.
           Your receipt data is not stored for offline access on this device.
         </p>
+        {/* A native navigation intentionally forces a full document reload when connectivity returns. */}
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
         <a href="/" className="mt-6 inline-block w-full bg-black px-5 py-3 text-sm text-white">
           TRY AGAIN
         </a>
