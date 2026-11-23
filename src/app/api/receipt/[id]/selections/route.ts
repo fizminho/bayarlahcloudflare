@@ -13,7 +13,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       !Number.isInteger(body.qty) || (body.qty as number) < 0 || (body.qty as number) > 999) return jsonError('Invalid selection', 400)
 
   const { DB } = env()
-  const cookie = req.cookies.get(participantCookieName(body.participant_id!))?.value
+  const cookie = req.cookies.get(participantCookieName(id))?.value
   if (!cookie) return jsonError('Participant authorization required', 401)
   const participant = await DB.prepare('SELECT id FROM participants WHERE id = ? AND receipt_id = ? AND token_hash = ?')
     .bind(body.participant_id, id, await sha256(cookie)).first()
