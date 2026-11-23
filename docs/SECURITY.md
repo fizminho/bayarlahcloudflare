@@ -39,7 +39,7 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 - Automated Node.js tests cover exact-origin checks, JSON content-type and size handling, UUID validation, participant cookie naming, SHA-256 output and rate-limit enforcement. These tests use a lightweight D1 mock for the rate-limit contract; they do not replace live D1 concurrency tests.
 - GitHub Actions runs ESLint, the security test suite and a Next.js production build on pushes to `main` / this hardening branch and pull requests targeting `main`.
 - Current dependency metadata has a peer-range conflict: the resolved `@opennextjs/cloudflare` release does not declare compatibility with the repository's pinned Next.js `16.2.7`. CI currently uses `--legacy-peer-deps` to proceed with verification; this is a compatibility warning to resolve by aligning/pinning the adapter and Next.js versions, not a security control.
-- The workflow has been added but its first hosted run has not yet been observed. Live D1 migration, browser multi-session tests and production verification remain outstanding.
+- GitHub Actions run `45116385152` completed successfully for the automated security tests, ESLint and Next.js production build. Live D1 migration, browser multi-session tests and production verification remain outstanding.
 
 ## Verification checklist
 
