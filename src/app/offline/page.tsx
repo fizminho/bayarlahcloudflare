@@ -1,5 +1,3 @@
-'use client'
-
 export default function OfflinePage() {
   return (
     <main className="min-h-screen bg-gray-200 flex items-center justify-center px-6">
@@ -11,9 +9,9 @@ export default function OfflinePage() {
           Connect to the internet to create, open or update a shared receipt.
           Your receipt data is not stored for offline access on this device.
         </p>
-        <button onClick={() => window.location.reload()} className="mt-6 w-full bg-black px-5 py-3 text-sm text-white">
+        <a href="/" className="mt-6 inline-block w-full bg-black px-5 py-3 text-sm text-white">
           TRY AGAIN
-        </button>
+        </a>
       </section>
     </main>
   )
