@@ -21,8 +21,8 @@ export async function POST(req: NextRequest) {
   const prompt = 'Extract purchased line items and tax from this receipt. Return only JSON: {"items":[{"item_name":"string","quantity":1,"price":0}],"tax":0}. price is per-unit RM amount. Ignore subtotal, rounding, total, cash and change.'
   const payload = JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: input.mimeType, data: base64 } }] }] })
   const fallback = await runGeminiFallback(GEMINI_API_KEY, payload)
-  if (fallback.response?.ok) {
-    const result = await fallback.response.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
+  if (fallback.data && typeof fallback.data === 'object') {
+    const result = fallback.data as { candidates?: { content?: { parts?: { text?: string }[] } }[] }
     const text = result.candidates?.[0]?.content?.parts?.[0]?.text
     if (text) {
       return NextResponse.json(
