@@ -3,15 +3,15 @@ import type { MetadataRoute } from 'next'
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: '/',
-    name: 'BayarLah - Split Bills Easily',
+    name: 'BayarLah by Binalah.com',
     short_name: 'BayarLah',
     description: 'Upload a receipt, share a link, and split the bill with friends.',
     start_url: '/',
     scope: '/',
     display: 'standalone',
     display_override: ['standalone', 'minimal-ui'],
-    background_color: '#e5e7eb',
-    theme_color: '#111827',
+    background_color: '#4a3fb5',
+    theme_color: '#4a3fb5',
     orientation: 'portrait-primary',
     categories: ['finance', 'utilities'],
     icons: [
