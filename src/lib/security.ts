@@ -9,11 +9,42 @@ export function sameOrigin(req: NextRequest): boolean {
 
 export async function readJson<T>(req: NextRequest, maxBytes = 32 * 1024): Promise<T | null> {
   if (!req.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return null
-  const length = Number(req.headers.get('content-length') ?? 0)
-  if (Number.isFinite(length) && length > maxBytes) return null
-  const raw = await req.text()
-  if (new TextEncoder().encode(raw).byteLength > maxBytes) return null
-  try { return JSON.parse(raw) as T } catch { return null }
+  const contentLength = req.headers.get('content-length')
+  if (contentLength !== null) {
+    const length = Number(contentLength)
+    if (!Number.isFinite(length) || length < 0 || length > maxBytes) return null
+  }
+
+  if (!req.body) return null
+  const reader = req.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel()
+        return null
+      }
+      chunks.push(value)
+    }
+  } catch {
+    return null
+  }
+
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as T
+  } catch {
+    return null
+  }
 }
 
 export function jsonError(message: string, status: number) {
@@ -25,14 +56,21 @@ export async function sha256(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('')
 }
 
-export async function consumeRateLimit(DB: any, req: NextRequest, scope: string, limit: number, windowSeconds: number): Promise<boolean> {
+export async function consumeRateLimit(
+  DB: { prepare: (query: string) => { bind: (...values: unknown[]) => { run: () => Promise<{ meta?: { changes?: number } }> } } },
+  req: NextRequest,
+  scope: string,
+  limit: number,
+  windowSeconds: number,
+): Promise<boolean> {
   const ip = req.headers.get('cf-connecting-ip') ?? 'unknown'
   const bucket = Math.floor(Date.now() / (windowSeconds * 1000)) * windowSeconds
   const key = await sha256(scope + ':' + await sha256(ip) + ':' + bucket)
-  await DB.prepare('INSERT INTO rate_limits (id, hit_count, expires_at) VALUES (?, 1, ?) ON CONFLICT(id) DO UPDATE SET hit_count = hit_count + 1 WHERE hit_count < ?')
-    .bind(key, bucket + windowSeconds, limit).run()
-  const row = await DB.prepare('SELECT hit_count FROM rate_limits WHERE id = ?').bind(key).first()
-  return !!row && row.hit_count <= limit
+  const result = await DB.prepare(
+    'INSERT INTO rate_limits (id, hit_count, expires_at) VALUES (?, 1, ?) ON CONFLICT(id) DO UPDATE SET hit_count = hit_count + 1 WHERE hit_count < ?'
+  ).bind(key, bucket + windowSeconds, limit).run()
+  // D1 reports zero changed rows when the conditional upsert refuses an over-limit request.
+  return result.meta?.changes === 1
 }
 
 export function validId(value: string): boolean {
