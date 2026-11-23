@@ -6,7 +6,8 @@ export const GEMINI_FREE_MODELS = [
   'gemini-2.5-flash-lite',
 ] as const
 
-const RETRYABLE_STATUSES = new Set([429, 500, 503])
+// 503 commonly means a model is overloaded. Move to another model immediately.
+const RETRYABLE_STATUSES = new Set([429, 500])
 const FALLTHROUGH_STATUSES = new Set([404, 429, 500, 503])
 
 export type GeminiAttempt = {
@@ -24,14 +25,15 @@ export type GeminiFallbackResult = {
   lastStatus: number | null
 }
 
-/** Free-tier model chain with a shared request deadline. */
+/** Free-tier model chain with a shared deadline and a bounded timeout per provider call. */
 export async function runGeminiFallback(
   apiKey: string,
   requestBody: string,
   fetcher: typeof fetch = fetch,
-  options: { timeoutMs?: number; retryDelayMs?: number } = {},
+  options: { timeoutMs?: number; perAttemptTimeoutMs?: number; retryDelayMs?: number } = {},
 ): Promise<GeminiFallbackResult> {
   const timeoutMs = options.timeoutMs ?? 20_000
+  const perAttemptTimeoutMs = options.perAttemptTimeoutMs ?? 6_000
   const retryDelayMs = options.retryDelayMs ?? 1_500
   const deadline = Date.now() + timeoutMs
   const attempts: GeminiAttempt[] = []
@@ -47,7 +49,8 @@ export async function runGeminiFallback(
       if (remaining <= 0) break
 
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), remaining)
+      const attemptTimeout = Math.min(remaining, perAttemptTimeoutMs)
+      const timeout = setTimeout(() => controller.abort(), attemptTimeout)
       let response: Response
       let responseData: unknown = null
       let providerMessage: string | undefined
@@ -58,7 +61,7 @@ export async function runGeminiFallback(
           body: requestBody,
           signal: controller.signal,
         })
-        // Keep the deadline active while consuming the provider response body too.
+        // Keep the per-attempt timeout active while consuming the provider response body too.
         if (response.ok) {
           responseData = await response.json()
         } else {
@@ -73,6 +76,7 @@ export async function runGeminiFallback(
         }
       } catch {
         attempts.push({ model, attempt: attempt + 1, outcome: 'network-error' })
+        // A timeout or network failure for one model must not prevent trying the next model.
         break
       } finally {
         clearTimeout(timeout)

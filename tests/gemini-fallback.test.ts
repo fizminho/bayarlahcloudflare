@@ -17,15 +17,55 @@ test('Gemini fallback retries 429 once, then advances to the next free model', a
   assert.deepEqual(result.attempts.map(x => x.outcome), ['retry', 'fallback', 'success'])
 })
 
-test('Gemini fallback retries 500/503 once per model before advancing', async () => {
-  const calls: string[] = []
+test('Gemini fallback skips an overloaded 503 model immediately', async () => {
+  let calls = 0
   const result = await runGeminiFallback('test-key', '{}', async () => {
-    calls.push('called')
-    return calls.length === 1 ? fail(503) : calls.length === 2 ? fail(500) : ok()
+    calls++
+    return calls === 1 ? fail(503) : ok()
+  }, { retryDelayMs: 0 })
+
+  assert.equal(calls, 2)
+  assert.equal(result.model, GEMINI_FREE_MODELS[1])
+  assert.deepEqual(result.attempts.map(x => x.outcome), ['fallback', 'success'])
+})
+
+test('Gemini fallback retries 500 once before advancing to the next model', async () => {
+  let calls = 0
+  const result = await runGeminiFallback('test-key', '{}', async () => {
+    calls++
+    return calls <= 2 ? fail(500) : ok()
   }, { retryDelayMs: 0 })
 
   assert.equal(result.model, GEMINI_FREE_MODELS[1])
   assert.deepEqual(result.attempts.map(x => x.outcome), ['retry', 'fallback', 'success'])
+})
+
+test('Gemini fallback advances to the next model after a network error', async () => {
+  let calls = 0
+  const result = await runGeminiFallback('test-key', '{}', async () => {
+    calls++
+    if (calls === 1) throw new TypeError('network failure')
+    return ok()
+  }, { retryDelayMs: 0 })
+
+  assert.equal(calls, 2)
+  assert.equal(result.model, GEMINI_FREE_MODELS[1])
+  assert.deepEqual(result.attempts.map(x => x.outcome), ['network-error', 'success'])
+})
+
+test('Gemini fallback bounds a stalled provider call and continues to another model', async () => {
+  let calls = 0
+  const result = await runGeminiFallback('test-key', '{}', async (_input, init) => {
+    calls++
+    if (calls > 1) return ok()
+    return await new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })
+    })
+  }, { timeoutMs: 500, perAttemptTimeoutMs: 20, retryDelayMs: 0 })
+
+  assert.equal(calls, 2)
+  assert.equal(result.model, GEMINI_FREE_MODELS[1])
+  assert.deepEqual(result.attempts.map(x => x.outcome), ['network-error', 'success'])
 })
 
 test('Gemini fallback skips unavailable 404 model IDs without retry', async () => {
