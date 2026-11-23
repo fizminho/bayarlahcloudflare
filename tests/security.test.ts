@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server.js'
 import {
   consumeRateLimit,
   participantCookieName,
+  participantOwnsReceipt,
   readJson,
   sameOrigin,
   sha256,
@@ -129,4 +130,31 @@ test('rate limiting accepts only the configured number of hits', async () => {
 
   assert.equal(results.filter(Boolean).length, 3)
   assert.equal(results.filter(value => !value).length, 5)
+})
+
+
+test('participant authorization is bound to receipt, participant and hashed capability', async () => {
+  const receiptId = '550e8400-e29b-41d4-a716-446655440000'
+  const participantId = '550e8400-e29b-41d4-a716-446655440001'
+  const token = 'opaque-capability-secret'
+  const expectedHash = await sha256(token)
+  const authorizedRows = new Set([participantId + ':' + receiptId + ':' + expectedHash])
+  const db = {
+    prepare: (sql: string) => ({
+      bind: (...values: unknown[]) => ({
+        first: async () => {
+          assert.match(sql, /id = \? AND receipt_id = \? AND token_hash = \?/)
+          assert.equal(values[2], expectedHash)
+          assert.notEqual(values[2], token)
+          return authorizedRows.has(values.join(':')) ? { id: participantId } : null
+        },
+      }),
+    }),
+  }
+
+  assert.equal(await participantOwnsReceipt(db, receiptId, participantId, token), true)
+  assert.equal(await participantOwnsReceipt(db, receiptId, participantId, 'wrong-token'), false)
+  assert.equal(await participantOwnsReceipt(db, '550e8400-e29b-41d4-a716-446655440002', participantId, token), false)
+  assert.equal(await participantOwnsReceipt(db, receiptId, '550e8400-e29b-41d4-a716-446655440003', token), false)
+  assert.equal(await participantOwnsReceipt(db, 'invalid', participantId, token), false)
 })
