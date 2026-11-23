@@ -9,6 +9,7 @@ import {
   sameOrigin,
   sha256,
   validId,
+  validateImagePayload,
 } from '../src/lib/security.ts'
 
 function request(url = 'https://bayarlah.test/api', init: ConstructorParameters<typeof NextRequest>[1] = {}) {
@@ -156,4 +157,25 @@ test('participant authorization is bound to receipt, participant and hashed capa
   assert.equal(await participantOwnsReceipt(db, '550e8400-e29b-41d4-a716-446655440002', participantId, token), false)
   assert.equal(await participantOwnsReceipt(db, receiptId, '550e8400-e29b-41d4-a716-446655440003', token), false)
   assert.equal(await participantOwnsReceipt(db, 'invalid', participantId, token), false)
+})
+
+
+test('image payload validation checks actual file signatures against declared MIME', () => {
+  const jpeg = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xd9))
+  const png = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a))
+  const webp = btoa('RIFF' + String.fromCharCode(0, 0, 0, 0) + 'WEBP')
+
+  assert.equal(validateImagePayload(jpeg, 'image/jpeg'), jpeg)
+  assert.equal(validateImagePayload(png, 'image/png'), png)
+  assert.equal(validateImagePayload(webp, 'image/webp'), webp)
+  assert.equal(validateImagePayload(jpeg, 'image/png'), null)
+  assert.equal(validateImagePayload('eyJvayI6dHJ1ZX0=', 'image/jpeg'), null)
+  assert.equal(validateImagePayload('not-base64!', 'image/jpeg'), null)
+  assert.equal(validateImagePayload(jpeg, 'image/gif'), null)
+  assert.equal(validateImagePayload(btoa('12345'), 'image/jpeg', 4), null)
+})
+
+test('image payload validation strips a data URL prefix before signature checks', () => {
+  const jpeg = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xd9))
+  assert.equal(validateImagePayload('data:image/jpeg;base64,' + jpeg, 'image/jpeg'), jpeg)
 })
