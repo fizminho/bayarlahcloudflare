@@ -17,7 +17,7 @@ export type GeminiAttempt = {
 }
 
 export type GeminiFallbackResult = {
-  response: Response | null
+  data: unknown | null
   model: string | null
   attempts: GeminiAttempt[]
   lastStatus: number | null
@@ -64,8 +64,9 @@ export async function runGeminiFallback(
 
       lastStatus = response.status
       if (response.ok) {
+        const data = await response.json()
         attempts.push({ model, attempt: attempt + 1, status: response.status, outcome: 'success' })
-        return { response, model, attempts, lastStatus }
+        return { data, model, attempts, lastStatus }
       }
 
       const retryable = RETRYABLE_STATUSES.has(response.status)
@@ -90,12 +91,12 @@ export async function runGeminiFallback(
         break
       }
 
-      return { response: null, model, attempts, lastStatus }
+      return { data: null, model, attempts, lastStatus }
     }
 
     if (Date.now() >= deadline) break
     if (lastStatus !== null && !FALLTHROUGH_STATUSES.has(lastStatus)) break
   }
 
-  return { response: null, model: lastModel, attempts, lastStatus }
+  return { data: null, model: lastModel, attempts, lastStatus }
 }
