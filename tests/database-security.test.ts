@@ -15,6 +15,7 @@ const ids = {
   participantA: '550e8400-e29b-41d4-a716-446655440005',
   participantB: '550e8400-e29b-41d4-a716-446655440006',
   participantOtherReceipt: '550e8400-e29b-41d4-a716-446655440007',
+  participantC: '550e8400-e29b-41d4-a716-446655440008',
 }
 
 function database() {
@@ -34,6 +35,7 @@ function database() {
   const insertParticipant = db.prepare('INSERT INTO participants (id, receipt_id, name) VALUES (?, ?, ?)')
   insertParticipant.run(ids.participantA, ids.receiptA, 'Amin')
   insertParticipant.run(ids.participantB, ids.receiptA, 'Bala')
+  insertParticipant.run(ids.participantC, ids.receiptA, 'Chandra')
   insertParticipant.run(ids.participantOtherReceipt, ids.receiptB, 'Chong')
   return db
 }
@@ -57,7 +59,7 @@ test('database triggers reject claims that exceed item quantity', () => {
     )
     insert.run('selection-a', ids.participantA, ids.itemA, 1)
     insert.run('selection-b', ids.participantB, ids.itemA, 1)
-    assert.throws(() => insert.run('selection-c', ids.participantOtherReceipt, ids.itemA, 1), /selection receipt mismatch/)
+    assert.throws(() => insert.run('selection-c', ids.participantC, ids.itemA, 1), /selection receipt mismatch/)
     assert.equal(db.prepare('SELECT SUM(qty) AS total FROM selections WHERE receipt_item_id = ?').get(ids.itemA).total, 2)
   } finally {
     db.close()
