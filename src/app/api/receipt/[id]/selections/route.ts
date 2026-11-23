@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { env } from '@/lib/cf'
-import { consumeRateLimit, jsonError, participantCookieName, readJson, sameOrigin, sha256, validId } from '@/lib/security'
+import { consumeRateLimit, jsonError, participantCookieName, participantOwnsReceipt, readJson, sameOrigin, sha256, validId } from '@/lib/security'
 
 type Body = { participant_id?: string; receipt_item_id?: string; qty?: number }
 
@@ -15,15 +15,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const { DB } = env()
   const cookie = req.cookies.get(participantCookieName(id))?.value
   if (!cookie) return jsonError('Participant authorization required', 401)
-  const participant = await DB.prepare('SELECT id FROM participants WHERE id = ? AND receipt_id = ? AND token_hash = ?')
-    .bind(body.participant_id, id, await sha256(cookie)).first()
-  if (!participant) return jsonError('Participant authorization failed', 403)
+  if (!await participantOwnsReceipt(DB, id, body.participant_id, cookie)) return jsonError('Participant authorization failed', 403)
   if (!await consumeRateLimit(DB, req, 'selection:' + body.participant_id, 60, 60)) return jsonError('Too many updates. Slow down.', 429)
 
   const qty = body.qty as number
   if (qty === 0) {
-    const result = await DB.prepare('DELETE FROM selections WHERE participant_id = ? AND receipt_item_id = ?')
-      .bind(body.participant_id, body.receipt_item_id).run()
+    const result = await DB.prepare('DELETE FROM selections WHERE participant_id = ? AND receipt_item_id = ?
+       AND EXISTS (SELECT 1 FROM receipt_items i WHERE i.id = selections.receipt_item_id AND i.receipt_id = ?)')
+      .bind(body.participant_id, body.receipt_item_id, id).run()
     if ((result.meta?.changes ?? 0) > 0) {
       await DB.prepare('UPDATE receipts SET version = version + 1 WHERE id = ?').bind(id).run()
     }
