@@ -13,6 +13,13 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 - Security headers include CSP, HSTS, frame denial, no-sniff, referrer and permissions policies; powered-by header is disabled.
 - API responses containing shared receipt state are marked no-store.
 
+## PWA and offline behavior
+
+- The web app manifest, standalone display mode, app icons and service-worker registration enable browser installation where supported.
+- The service worker caches only versioned static assets and the generic offline screen. It never caches API responses, receipt pages, participant data or cross-origin content.
+- Receipt creation, OCR, sharing and participant updates still require an internet connection. Offline mode is a safe fallback screen, not offline receipt storage or synchronization.
+- On iPhone and iPad, installation is performed through Safari Share → Add to Home Screen; supported Chromium browsers can use the native install prompt.
+
 ## Public share model
 
 - GET /api/receipt/:id remains public by design so guests can view a receipt and participant progress.
