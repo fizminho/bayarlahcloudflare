@@ -8,7 +8,7 @@ export function sameOrigin(req: NextRequest): boolean {
 }
 
 export async function readJson<T>(req: NextRequest, maxBytes = 32 * 1024): Promise<T | null> {
-  if (!req.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return null
+  if (req.headers.get('content-type')?.toLowerCase().split(';', 1)[0].trim() !== 'application/json') return null
   const contentLength = req.headers.get('content-length')
   if (contentLength !== null) {
     const length = Number(contentLength)
