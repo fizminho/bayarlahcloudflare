@@ -89,3 +89,28 @@ export async function participantOwnsReceipt(
 }
 
 export function participantCookieName(id: string): string { return 'blp_' + id }
+
+
+export function validateImagePayload(base64Input: string, mimeType: string, maxBytes = 5 * 1024 * 1024): string | null {
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) return null
+  const base64 = base64Input.replace(/^data:[^,]+,/, '')
+  if (!base64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64) || base64.length % 4 === 1) return null
+
+  let binary: string
+  try {
+    binary = atob(base64)
+  } catch {
+    return null
+  }
+  if (binary.length === 0 || binary.length > maxBytes) return null
+
+  const byte = (index: number) => binary.charCodeAt(index)
+  const isJpeg = mimeType === 'image/jpeg' &&
+    binary.length >= 3 && byte(0) === 0xff && byte(1) === 0xd8 && byte(2) === 0xff
+  const isPng = mimeType === 'image/png' &&
+    binary.length >= 8 && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((value, index) => byte(index) === value)
+  const isWebp = mimeType === 'image/webp' &&
+    binary.length >= 12 && binary.slice(0, 4) === 'RIFF' && binary.slice(8, 12) === 'WEBP'
+
+  return isJpeg || isPng || isWebp ? base64 : null
+}
