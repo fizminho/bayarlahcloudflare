@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy": "opennextjs-cloudflare build && wrangler d1 migrations apply bayarlah --remote && opennextjs-cloudflare deploy",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:deploy": "wrangler d1 migrations apply bayarlah --remote && opennextjs-cloudflare deploy",
+    "deploy": "npm run cf:build && npm run cf:deploy",
     "db:migrate:local": "wrangler d1 migrations apply bayarlah --local",
     "db:migrate:remote": "wrangler d1 migrations apply bayarlah --remote",
     "test": "node --experimental-strip-types --experimental-sqlite --test tests/*.test.ts"
