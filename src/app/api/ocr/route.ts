@@ -5,7 +5,7 @@ import { runGeminiFallback } from '@/lib/gemini-fallback'
 
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const WORKERS_AI_MODEL = '@cf/meta/llama-3.2-11b-vision-instruct'
-const WORKERS_AI_TIMEOUT_MS = 10_000
+const WORKERS_AI_TIMEOUT_MS = 20_000
 type Body = { base64?: string; mimeType?: string }
 type WorkersAI = {
   run: (model: string, input: { prompt: string; image: string; max_tokens: number; temperature: number }) => Promise<unknown>
@@ -83,6 +83,13 @@ export async function POST(req: NextRequest) {
 
   const requestId = crypto.randomUUID()
 
+  let workersAiFallbackReason: 'binding-unavailable' | 'timeout' | 'provider-error' | 'invalid-response' | null = null
+
+  if (!AI) {
+    workersAiFallbackReason = 'binding-unavailable'
+    console.warn('[OCR] Workers AI binding unavailable; using Gemini fallback', { requestId })
+  }
+
   if (AI) {
     try {
       const text = await runWorkersAIOcr(AI, base64, input.mimeType)
@@ -93,15 +100,19 @@ export async function POST(req: NextRequest) {
           { headers: { 'Cache-Control': 'no-store' } },
         )
       }
+      workersAiFallbackReason = 'invalid-response'
       console.warn('[OCR] Workers AI returned unusable receipt JSON; falling back to Gemini', {
         requestId,
         model: WORKERS_AI_MODEL,
       })
     } catch (error) {
+      const reason = error instanceof Error ? error.message.slice(0, 160) : 'unknown'
+      workersAiFallbackReason = /timed out/i.test(reason) ? 'timeout' : 'provider-error'
       console.warn('[OCR] Workers AI failed; falling back to Gemini', {
         requestId,
         model: WORKERS_AI_MODEL,
-        reason: error instanceof Error ? error.message.slice(0, 160) : 'unknown',
+        fallbackReason: workersAiFallbackReason,
+        reason,
       })
     }
   }
@@ -123,7 +134,9 @@ export async function POST(req: NextRequest) {
             text,
             model: fallback.model,
             provider: 'gemini',
-            fallbackUsed: Boolean(AI),
+            fallbackUsed: true,
+            fallbackReason: workersAiFallbackReason,
+            workersAiModel: WORKERS_AI_MODEL,
             modelAttempts: fallback.attempts,
           },
           { headers: { 'Cache-Control': 'no-store' } },
