@@ -9,8 +9,8 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 - D1-backed fixed-window rate limits for receipt creation, participant joins and selection updates; OCR has its own IP-based quota.
 - Participant capability tokens are cryptographically random, stored only as SHA-256 hashes in D1 and issued in HttpOnly, Secure, SameSite=Strict cookies. Public participant IDs are not authorization secrets.
 - Selection writes verify the capability token against the participant and receipt. Capacity checks are performed in the write statement itself, and D1 triggers enforce same-receipt ownership and aggregate quantity limits as defense in depth.
-- OCR runs Cloudflare Workers AI first through the `AI` binding using Meta Llama 3.2 11B Vision Instruct. It falls back to the existing Gemini model chain when Workers AI is unavailable, times out or returns invalid receipt JSON. Both providers must produce the expected structured receipt shape before a result is returned.
-- OCR provider keys remain server-side; provider errors and image/prompt contents are not returned or logged. The Gemini model fallback retains its bounded request deadline and explicit model allowlist.
+- OCR uses the Gemini API only. It tries the configured Gemini model chain with a shared deadline, bounded per-attempt timeout and controlled retry/fallback behavior. Cloudflare Workers AI is not configured or invoked by the OCR endpoint.
+- OCR provider keys remain server-side; provider errors and image/prompt contents are not returned or logged. The Gemini model chain retains its bounded request deadline and explicit model allowlist.
 - Security headers include CSP, HSTS, frame denial, no-sniff, referrer and permissions policies; powered-by header is disabled.
 - API responses containing shared receipt state are marked no-store.
 
@@ -30,14 +30,12 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 
 ## Deployment requirements
 
-1. Apply migrations/0002_security.sql to local and remote D1 before deploying this branch.
-2. Ensure the Workers AI binding named `AI` is present in the deployed Worker configuration (configured in `wrangler.jsonc`).
-3. Accept Meta's Llama 3.2 11B Vision license for the Cloudflare account before the first production inference request.
-4. Keep `GEMINI_API_KEY` as a Worker secret for fallback OCR. Never put it in NEXT_PUBLIC variables.
-5. Deploy the Worker only after migrations succeed.
-6. Verify join, selection update, polling, sharing and OCR in separate browser sessions.
-7. Confirm production uses HTTPS. Participant cookies are Secure-only.
-8. Configure Cloudflare edge rate limiting/WAF as an additional layer for public endpoints.
+1. Apply migrations/migrations in the repository to local and remote D1 before deploying schema changes.
+2. Keep `GEMINI_API_KEY` as a Worker secret for OCR. Never put it in NEXT_PUBLIC variables.
+3. Deploy the Worker only after migrations succeed.
+4. Verify join, selection update, polling, sharing and OCR in separate browser sessions.
+5. Confirm production uses HTTPS. Participant cookies are Secure-only.
+6. Configure Cloudflare edge rate limiting/WAF as an additional layer for public endpoints.
 
 ## Known limitations and follow-up
 
@@ -65,5 +63,5 @@ This document records security controls for the Cloudflare Workers + D1 applicat
 - Exceed each configured rate limit; requests after the limit must receive 429.
 - Confirm GET share endpoints remain public by design and return no-store cache headers.
 - Confirm browser response headers include CSP, HSTS, frame denial, no-sniff and referrer policy.
-- Upload a valid receipt with Workers AI enabled; verify `provider=cloudflare-workers-ai` and `fallbackUsed=false`.
-- Simulate Workers AI failure or invalid JSON; verify Gemini is used and returns `provider=gemini` with `fallbackUsed=true`.
+- Upload a valid receipt; verify `provider=gemini`, `fallbackUsed=false` and a successful model attempt.
+- Simulate Gemini model failures; verify the configured model chain advances within the shared deadline and returns a safe 502 response when exhausted.
